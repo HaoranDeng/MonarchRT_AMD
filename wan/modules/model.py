@@ -3,6 +3,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat
@@ -15,6 +16,38 @@ from .attention import flash_attention
 from .monarch_attn import monarch_attn
 
 __all__ = ['WanModel']
+
+
+def dense_attention_reference(q, k, v, block_causal_size=None):
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
+    attn_mask = None
+    if block_causal_size is not None:
+        lq, lk = q.size(-2), k.size(-2)
+        q_block = torch.arange(lq, device=q.device).div(
+            block_causal_size, rounding_mode='floor').unsqueeze(1)
+        k_block = torch.arange(lk, device=q.device).div(
+            block_causal_size, rounding_mode='floor').unsqueeze(0)
+        allow = k_block <= q_block
+        attn_mask = torch.zeros(1, 1, lq, lk, device=q.device, dtype=q.dtype)
+        attn_mask = attn_mask.masked_fill(~allow, float('-inf'))
+    x = torch.nn.functional.scaled_dot_product_attention(
+        q, k, v, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
+    return x.transpose(1, 2).contiguous()
+
+
+def maybe_print_dense_attention_mae(tag, actual, q, k, v, enabled, block_causal_size=None):
+    if not enabled:
+        return
+    with torch.no_grad():
+        ref = dense_attention_reference(q, k, v, block_causal_size=block_causal_size)
+        mae = (actual.float() - ref.float()).abs().mean()
+    if (not dist.is_initialized()) or dist.get_rank() == 0:
+        print(
+            f"[compare_to_dense] {tag}: mae={mae.item():.6f} "
+            f"shape={tuple(actual.shape)}"
+        )
 
 
 def sinusoidal_embedding_1d(dim, position):
@@ -214,6 +247,8 @@ class WanSelfAttention(nn.Module):
         self.monarch_f_tied = 1
         self.enable_bm41 = False
         self.bm41_block_size = 32
+        self.monarch_compare_to_dense = False
+        self.bm41_compare_to_dense = False
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -252,11 +287,17 @@ class WanSelfAttention(nn.Module):
                 v,
                 block_size=self.bm41_block_size,
             )
+            maybe_print_dense_attention_mae(
+                "bm41", x, roped_query, roped_key, v,
+                self.bm41_compare_to_dense)
         elif self.enable_monarch:
             f, h, w = grid_size
             b, s, _, d = q.shape
             assert f % self.monarch_f_tied == 0 and h % self.monarch_h_reduce == 0 and w % self.monarch_w_reduce == 0
             x = monarch_attn(roped_query, roped_key, v, self.monarch_f_tied, self.monarch_h_reduce, self.monarch_w_reduce, h, w, num_iters=self.monarch_num_iters)
+            maybe_print_dense_attention_mae(
+                "monarch", x, roped_query, roped_key, v,
+                self.monarch_compare_to_dense)
         else:
             x = flash_attention(
                 q=roped_query,
@@ -740,6 +781,7 @@ class WanModel(ModelMixin, ConfigMixin):
         f_tied = args.get("f_tied", 1)
         h_reduce = args.get("h_reduce", 1)
         w_reduce = args.get("w_reduce", 1)
+        compare_to_dense = args.get("compare_to_dense", False)
 
         for block in self.blocks:
             block.self_attn.enable_monarch = enable
@@ -747,6 +789,7 @@ class WanModel(ModelMixin, ConfigMixin):
             block.self_attn.monarch_f_tied = f_tied
             block.self_attn.monarch_h_reduce = h_reduce
             block.self_attn.monarch_w_reduce = w_reduce
+            block.self_attn.monarch_compare_to_dense = compare_to_dense
 
     @property
     def bm41_args(self):
@@ -757,10 +800,12 @@ class WanModel(ModelMixin, ConfigMixin):
         self._bm41_args = args
         enable = args.get("enable", False)
         block_size = args.get("block_size", 32)
+        compare_to_dense = args.get("compare_to_dense", False)
 
         for block in self.blocks:
             block.self_attn.enable_bm41 = enable
             block.self_attn.bm41_block_size = block_size
+            block.self_attn.bm41_compare_to_dense = compare_to_dense
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = value

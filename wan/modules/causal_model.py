@@ -18,7 +18,11 @@ import torch.distributed as dist
 from ..rmsnorm_ops import rmsnorm
 from .bm41_attn import bm41_attention
 from .monarch_attn import monarch_attn, monarch_attn_with_kv_cache
-from .model import build_cos_sin_cache_3d, apply_rope_video_tokens
+from .model import (
+    build_cos_sin_cache_3d,
+    apply_rope_video_tokens,
+    maybe_print_dense_attention_mae,
+)
 
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
@@ -55,6 +59,8 @@ class CausalWanSelfAttention(nn.Module):
         self.monarch_f_tied = 1
         self.enable_bm41 = False
         self.bm41_block_size = 32
+        self.monarch_compare_to_dense = False
+        self.bm41_compare_to_dense = False
         
 
         # layers
@@ -117,6 +123,10 @@ class CausalWanSelfAttention(nn.Module):
                     self.monarch_num_iters,
                     block_causal_size=self.num_frame_per_block*frame_height*frame_width,
                 )
+                maybe_print_dense_attention_mae(
+                    "causal_monarch_full", x, roped_query, roped_key, v,
+                    self.monarch_compare_to_dense,
+                    block_causal_size=self.num_frame_per_block * frame_height * frame_width)
             else:
                 padded_length = math.ceil(q.shape[1] / 128) * 128 - q.shape[1]
                 padded_roped_query = torch.cat(
@@ -182,6 +192,11 @@ class CausalWanSelfAttention(nn.Module):
                     kv_cache["v"][:, cache_start:local_end_index],
                     block_size=self.bm41_block_size,
                 )
+                maybe_print_dense_attention_mae(
+                    "causal_bm41_kv", x, roped_query,
+                    kv_cache["k"][:, cache_start:local_end_index],
+                    kv_cache["v"][:, cache_start:local_end_index],
+                    self.bm41_compare_to_dense)
             elif self.enable_monarch:
                 assert frame_height % self.monarch_h_reduce == 0 and frame_width % self.monarch_w_reduce == 0 and nframes % self.monarch_f_tied == 0
                 x = monarch_attn_with_kv_cache(
@@ -199,6 +214,14 @@ class CausalWanSelfAttention(nn.Module):
                     frame_width,
                     num_iters=self.monarch_num_iters,
                 )
+                dense_k = kv_cache["k"][:, cache_start:local_end_index].clone()
+                dense_v = kv_cache["v"][:, cache_start:local_end_index].clone()
+                dense_start = local_start_index - cache_start
+                dense_k[:, dense_start:dense_start + roped_key.shape[1]] = roped_key
+                dense_v[:, dense_start:dense_start + v.shape[1]] = v
+                maybe_print_dense_attention_mae(
+                    "causal_monarch_kv", x, roped_query, dense_k, dense_v,
+                    self.monarch_compare_to_dense)
             else:
                 kv_cache["k"][:, local_start_index:local_end_index] = roped_key
                 kv_cache["v"][:, local_start_index:local_end_index] = v
@@ -485,6 +508,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         f_tied = args.get("f_tied", 1)
         h_reduce = args.get("h_reduce", 1)
         w_reduce = args.get("w_reduce", 1)
+        compare_to_dense = args.get("compare_to_dense", False)
 
         self.enable_monarch = enable
         for block in self.blocks:
@@ -493,6 +517,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             block.self_attn.monarch_f_tied = f_tied
             block.self_attn.monarch_h_reduce = h_reduce
             block.self_attn.monarch_w_reduce = w_reduce
+            block.self_attn.monarch_compare_to_dense = compare_to_dense
 
     @property
     def bm41_args(self):
@@ -503,10 +528,12 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         self._bm41_args = args
         enable = args.get("enable", False)
         block_size = args.get("block_size", 32)
+        compare_to_dense = args.get("compare_to_dense", False)
 
         for block in self.blocks:
             block.self_attn.enable_bm41 = enable
             block.self_attn.bm41_block_size = block_size
+            block.self_attn.bm41_compare_to_dense = compare_to_dense
     
     @property
     def num_frame_per_block(self):
