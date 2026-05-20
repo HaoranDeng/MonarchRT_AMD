@@ -10,8 +10,6 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
-
 if [ -n "${CONDA_ROOT:-}" ] && [ -f "${CONDA_ROOT}/etc/profile.d/conda.sh" ]; then
   # shellcheck source=/dev/null
   source "${CONDA_ROOT}/etc/profile.d/conda.sh"
@@ -23,34 +21,11 @@ elif [ -f "${HOME}/miniconda3/etc/profile.d/conda.sh" ]; then
   source "${HOME}/miniconda3/etc/profile.d/conda.sh"
 fi
 
-conda activate "${CONDA_ENV:-monarch_rt}"
+conda activate monarch_rt
 
-mkdir -p out
-
-NPZ="${NPZ:-}"
-DEVICE="${DEVICE:-cuda}"
-BLOCK_SIZE="${BLOCK_SIZE:-32}"
-QUICK_TOKENS="${QUICK_TOKENS:-4096}"
-BATCH="${BATCH:-2}"
-HEADS="${HEADS:-4}"
-TOKENS="${TOKENS:-512}"
-DIM="${DIM:-64}"
-CHECK_ATTN_MATRIX="${CHECK_ATTN_MATRIX:-0}"
-
-args=(
-  --device "$DEVICE"
-  --block-size "$BLOCK_SIZE"
-  --quick-tokens "$QUICK_TOKENS"
-)
-
-if [[ -n "$NPZ" ]]; then
-  args+=(--npz "$NPZ")
-else
-  args+=(--batch "$BATCH" --heads "$HEADS" --tokens "$TOKENS" --dim "$DIM")
-fi
-
-if [[ "$CHECK_ATTN_MATRIX" == "1" ]]; then
-  args+=(--check-attn-matrix)
-fi
-
-python scripts/compare_bm41_attention.py "${args[@]}"
+python scripts/compare_bm41_attention.py \
+  --npz assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz \
+  --device cuda \
+  --block-size 32 \
+  --quick-tokens 4096 \
+  --check-attn-matrix

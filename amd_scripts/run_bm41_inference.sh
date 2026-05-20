@@ -10,8 +10,6 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
-
 if [ -n "${CONDA_ROOT:-}" ] && [ -f "${CONDA_ROOT}/etc/profile.d/conda.sh" ]; then
   # shellcheck source=/dev/null
   source "${CONDA_ROOT}/etc/profile.d/conda.sh"
@@ -23,39 +21,12 @@ elif [ -f "${HOME}/miniconda3/etc/profile.d/conda.sh" ]; then
   source "${HOME}/miniconda3/etc/profile.d/conda.sh"
 fi
 
-conda activate "${CONDA_ENV:-monarch_rt}"
+conda activate monarch_rt
 
-mkdir -p out
-
-CONFIG_PATH="${CONFIG_PATH:-configs/wan_bm41_fewstep_dmd.yaml}"
-CHECKPOINT_PATH="${CHECKPOINT_PATH:-checkpoints/self_forcing_dmd.pt}"
-DATA_PATH="${DATA_PATH:-prompts/MovieGenVideoBench_extended.txt}"
-OUTPUT_FOLDER="${OUTPUT_FOLDER:-videos/bm41}"
-MAX_PROMPTS="${MAX_PROMPTS:-10}"
-
-args=(
-  --config_path "$CONFIG_PATH"
-  --checkpoint_path "$CHECKPOINT_PATH"
-  --data_path "$DATA_PATH"
-  --output_folder "$OUTPUT_FOLDER"
-  --max_prompts "$MAX_PROMPTS"
+python inference.py \
+  --config_path configs/wan_bm41_fewstep_dmd.yaml \
+  --output_folder videos/bm41 \
+  --checkpoint_path checkpoints/self_forcing_dmd.pt \
+  --data_path prompts/MovieGenVideoBench_extended.txt \
+  --max_prompts 10 \
   --use_ema
-)
-
-if [ -n "${EXTENDED_PROMPT_PATH:-}" ]; then
-  args+=(--extended_prompt_path "$EXTENDED_PROMPT_PATH")
-fi
-
-if [ -n "${NUM_SAMPLES:-}" ]; then
-  args+=(--num_samples "$NUM_SAMPLES")
-fi
-
-if [ -n "${SEED:-}" ]; then
-  args+=(--seed "$SEED")
-fi
-
-if [ "${SAVE_WITH_INDEX:-0}" = "1" ]; then
-  args+=(--save_with_index)
-fi
-
-python inference.py "${args[@]}"
