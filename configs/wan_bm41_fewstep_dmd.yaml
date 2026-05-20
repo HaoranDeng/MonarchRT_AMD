@@ -58,6 +58,6 @@ monarch_args:
   compare_to_dense: true
 bm41_args:
   enable: true
-  block_size: 32
+  block_size: 4
   compare_to_dense: true
 causal: false

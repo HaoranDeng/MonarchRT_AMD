@@ -26,6 +26,6 @@ conda activate monarch_rt
 python scripts/compare_bm41_attention.py \
   --npz assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz \
   --device cuda \
-  --block-size 32 \
+  --block-size 4 \
   --quick-tokens 4096 \
   --check-attn-matrix

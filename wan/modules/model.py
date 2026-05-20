@@ -249,7 +249,7 @@ class WanSelfAttention(nn.Module):
         self.monarch_w_reduce = 1
         self.monarch_f_tied = 1
         self.enable_bm41 = False
-        self.bm41_block_size = 32
+        self.bm41_block_size = 4
         self.monarch_compare_to_dense = False
         self.bm41_compare_to_dense = False
 
@@ -802,7 +802,7 @@ class WanModel(ModelMixin, ConfigMixin):
     def bm41_args(self, args: dict):
         self._bm41_args = args
         enable = args.get("enable", False)
-        block_size = args.get("block_size", 32)
+        block_size = args.get("block_size", 4)
         compare_to_dense = args.get("compare_to_dense", False)
 
         for block in self.blocks:

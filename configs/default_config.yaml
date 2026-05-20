@@ -25,5 +25,5 @@ monarch_args:
 
 bm41_args:
   enable: false
-  block_size: 32
+  block_size: 4
   compare_to_dense: true
