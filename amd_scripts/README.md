@@ -1,5 +1,11 @@
 # AMD scripts
 
+Run BM41 inference:
+
+```bash
+sbatch amd_scripts/run_bm41_inference.sh
+```
+
 Save the first self-attention Q/K/V from video generation:
 
 ```bash
