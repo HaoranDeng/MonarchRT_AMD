@@ -91,41 +91,37 @@ def _apply_rope_video_tokens_torch(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """PyTorch RoPE fallback applied independently to every attention head."""
     B, S, H, D = q.shape
+    half = D // 2
     positions = positions.to(device=cos_sin_cache.device, dtype=torch.long)
     gathered = cos_sin_cache.index_select(0, positions)
-    cos = gathered[:, :D].to(dtype=q.dtype).view(B * S, 1, D)
-    sin = gathered[:, D:].to(dtype=q.dtype).view(B * S, 1, D)
+    cos = gathered[:, :half].to(dtype=q.dtype).view(B * S, 1, half)
+    sin = gathered[:, half:].to(dtype=q.dtype).view(B * S, 1, half)
 
     q_view = q.reshape(B * S, H, D)
     k_view = k.reshape(B * S, H, D)
 
     if is_neox:
-        half = D // 2
         q1, q2 = q_view[..., :half], q_view[..., half:]
         k1, k2 = k_view[..., :half], k_view[..., half:]
-        cos_half = cos[..., :half]
-        sin_half = sin[..., :half]
         q_out = torch.cat(
-            [q1 * cos_half - q2 * sin_half, q1 * sin_half + q2 * cos_half],
+            [q1 * cos - q2 * sin, q1 * sin + q2 * cos],
             dim=-1,
         )
         k_out = torch.cat(
-            [k1 * cos_half - k2 * sin_half, k1 * sin_half + k2 * cos_half],
+            [k1 * cos - k2 * sin, k1 * sin + k2 * cos],
             dim=-1,
         )
     else:
         q_even, q_odd = q_view[..., ::2], q_view[..., 1::2]
         k_even, k_odd = k_view[..., ::2], k_view[..., 1::2]
-        cos_half = cos[..., ::2]
-        sin_half = sin[..., ::2]
         q_out = torch.stack(
-            [q_even * cos_half - q_odd * sin_half,
-             q_even * sin_half + q_odd * cos_half],
+            [q_even * cos - q_odd * sin,
+             q_even * sin + q_odd * cos],
             dim=-1,
         ).flatten(-2)
         k_out = torch.stack(
-            [k_even * cos_half - k_odd * sin_half,
-             k_even * sin_half + k_odd * cos_half],
+            [k_even * cos - k_odd * sin,
+             k_even * sin + k_odd * cos],
             dim=-1,
         ).flatten(-2)
 
