@@ -6,7 +6,6 @@ import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat
-from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
 
 from ..rmsnorm_ops import rmsnorm
 from .._rocm_runtime import is_rocm
@@ -90,22 +89,46 @@ def _apply_rope_video_tokens_torch(
     *,
     is_neox: bool,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """PyTorch RoPE matching FlashInfer layout: flatten heads to ``(nnz, 1, H*D)``."""
+    """PyTorch RoPE fallback applied independently to every attention head."""
     B, S, H, D = q.shape
-    nnz = B * S
-    rotary_dim = cos_sin_cache.shape[-1]
-    cos_cache = cos_sin_cache[:, : rotary_dim // 2]
-    sin_cache = cos_sin_cache[:, rotary_dim // 2 :]
-    pos = positions.to(device=cos_sin_cache.device, dtype=torch.long)
-    if pos.numel() != nnz:
-        pos = pos[:nnz]
-    cos = cos_cache.index_select(0, pos).unsqueeze(1)
-    sin = sin_cache.index_select(0, pos).unsqueeze(1)
-    # Same view as ``apply_rope_with_cos_sin_cache_inplace``: (nnz, H*D) -> (nnz, 1, H*D).
-    q_view = q.reshape(nnz, 1, H * D)
-    k_view = k.reshape(nnz, 1, H * D)
-    q_out = _rope_rotate_heads(q_view, cos, sin, interleave=not is_neox)
-    k_out = _rope_rotate_heads(k_view, cos, sin, interleave=not is_neox)
+    positions = positions.to(device=cos_sin_cache.device, dtype=torch.long)
+    gathered = cos_sin_cache.index_select(0, positions)
+    cos = gathered[:, :D].to(dtype=q.dtype).view(B * S, 1, D)
+    sin = gathered[:, D:].to(dtype=q.dtype).view(B * S, 1, D)
+
+    q_view = q.reshape(B * S, H, D)
+    k_view = k.reshape(B * S, H, D)
+
+    if is_neox:
+        half = D // 2
+        q1, q2 = q_view[..., :half], q_view[..., half:]
+        k1, k2 = k_view[..., :half], k_view[..., half:]
+        cos_half = cos[..., :half]
+        sin_half = sin[..., :half]
+        q_out = torch.cat(
+            [q1 * cos_half - q2 * sin_half, q1 * sin_half + q2 * cos_half],
+            dim=-1,
+        )
+        k_out = torch.cat(
+            [k1 * cos_half - k2 * sin_half, k1 * sin_half + k2 * cos_half],
+            dim=-1,
+        )
+    else:
+        q_even, q_odd = q_view[..., ::2], q_view[..., 1::2]
+        k_even, k_odd = k_view[..., ::2], k_view[..., 1::2]
+        cos_half = cos[..., ::2]
+        sin_half = sin[..., ::2]
+        q_out = torch.stack(
+            [q_even * cos_half - q_odd * sin_half,
+             q_even * sin_half + q_odd * cos_half],
+            dim=-1,
+        ).flatten(-2)
+        k_out = torch.stack(
+            [k_even * cos_half - k_odd * sin_half,
+             k_even * sin_half + k_odd * cos_half],
+            dim=-1,
+        ).flatten(-2)
+
     return q_out.view(B, S, H, D), k_out.view(B, S, H, D)
 
 
@@ -126,6 +149,8 @@ def apply_rope_video_tokens(
 
     q2 = q.reshape(B * S, H * D).contiguous()
     k2 = k.reshape(B * S, H * D).contiguous()
+    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
+
     apply_rope_with_cos_sin_cache_inplace(
         positions=positions.to(device=q.device, dtype=torch.int32),
         query=q2,
@@ -808,7 +833,7 @@ class WanModel(ModelMixin, ConfigMixin):
         # arguments
         kwargs = dict(
             e=e0,
-            grid_sizes=grid_size,
+            grid_size=grid_size,
             context=context,
             context_lens=context_lens,
             rope_cache=rope_cache)
@@ -936,9 +961,17 @@ class WanModel(ModelMixin, ConfigMixin):
         # arguments
         kwargs = dict(
             e=e0,
-            grid_sizes=grid_size,
+            grid_size=grid_size,
             context=context,
-            context_lens=context_lens)
+            context_lens=context_lens,
+            rope_cache=build_cos_sin_cache_3d(
+                self.freqs_t,
+                self.freqs_h,
+                self.freqs_w,
+                *grid_size,
+                x.shape[0],
+                device=device,
+            ))
 
         def create_custom_forward(module):
             def custom_forward(*inputs, **kwargs):

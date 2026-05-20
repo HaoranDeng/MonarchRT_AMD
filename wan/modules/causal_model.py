@@ -825,7 +825,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         # arguments
         kwargs = dict(
             e=e0,
-            grid_sizes=grid_size,
+            grid_size=grid_size,
             context=context,
             context_lens=context_lens,
             block_mask=self.block_mask,
