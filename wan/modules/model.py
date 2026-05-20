@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -16,6 +17,8 @@ from .attention import flash_attention
 from .monarch_attn import monarch_attn
 
 __all__ = ['WanModel']
+
+_FIRST_QKV_SAVED = False
 
 
 def dense_attention_reference(q, k, v, block_causal_size=None):
@@ -51,6 +54,28 @@ def maybe_print_dense_attention_mae(tag, actual, q, k, v, enabled, block_causal_
             f"rel_mae={rel_mae.item():.4f}% "
             f"shape={tuple(actual.shape)}"
         )
+
+
+def maybe_save_first_attention_qkv(q, k, v, tag):
+    global _FIRST_QKV_SAVED
+    path = os.environ.get("MONARCHRT_SAVE_FIRST_QKV_PATH")
+    if _FIRST_QKV_SAVED or not path:
+        return
+    if dist.is_initialized() and dist.get_rank() != 0:
+        return
+
+    _FIRST_QKV_SAVED = True
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    payload = {
+        "q": q.detach().transpose(1, 2).contiguous().to(torch.float16).cpu().numpy(),
+        "k": k.detach().transpose(1, 2).contiguous().to(torch.float16).cpu().numpy(),
+        "v": v.detach().transpose(1, 2).contiguous().to(torch.float16).cpu().numpy(),
+        "tag": tag,
+        "shape": tuple(q.shape),
+    }
+    import numpy as np
+    np.savez(path, **payload)
+    print(f"[qkv_capture] saved first attention q/k/v to {path} tag={tag} shape={tuple(q.shape)}")
 
 
 def sinusoidal_embedding_1d(dim, position):
@@ -282,6 +307,7 @@ class WanSelfAttention(nn.Module):
 
         q, k, v = qkv_fn(x)
         roped_query, roped_key = apply_rope_video_tokens(q, k, rope_cache)
+        maybe_save_first_attention_qkv(roped_query, roped_key, v, "wan_self_attn")
 
         if self.enable_bm41:
             x = bm41_attention(

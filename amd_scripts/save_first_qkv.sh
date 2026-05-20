@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J BM41_Infer         # Job name
+#SBATCH -J Save_QKV           # Job name
 #SBATCH -o out/job.%j.out     # Name of stdout output file (%j expands to jobId)
 #SBATCH -e out/job.%j.err     # Name of stderr error file
 #SBATCH -N 1                  # Total number of nodes requested
@@ -23,10 +23,12 @@ fi
 
 conda activate monarch_rt
 
+export MONARCHRT_SAVE_FIRST_QKV_PATH=assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz
+
 python inference.py \
-  --config_path configs/wan_bm41_fewstep_dmd.yaml \
-  --output_folder videos/bm41 \
+  --config_path configs/self_forcing_dmd.yaml \
+  --output_folder videos/qkv_capture \
   --checkpoint_path checkpoints/self_forcing_dmd.pt \
   --data_path prompts/MovieGenVideoBench_extended.txt \
-  --max_prompts 10 \
+  --max_prompts 1 \
   --use_ema

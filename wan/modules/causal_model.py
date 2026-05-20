@@ -22,6 +22,7 @@ from .model import (
     build_cos_sin_cache_3d,
     apply_rope_video_tokens,
     maybe_print_dense_attention_mae,
+    maybe_save_first_attention_qkv,
 )
 
 
@@ -103,6 +104,7 @@ class CausalWanSelfAttention(nn.Module):
 
         q, k, v = qkv_fn(x)
         roped_query, roped_key = apply_rope_video_tokens(q, k, rope_cache)
+        maybe_save_first_attention_qkv(roped_query, roped_key, v, "causal_self_attn")
 
         if kv_cache is None:
             if self.enable_bm41:

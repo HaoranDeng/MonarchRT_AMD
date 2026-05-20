@@ -1,15 +1,15 @@
 # AMD scripts
 
-Submit BM41 inference:
+Save the first self-attention Q/K/V from video generation:
 
 ```bash
-sbatch amd_scripts/run_bm41_inference.sh
+sbatch amd_scripts/save_first_qkv.sh
 ```
 
-Submit BM41 QKV comparison:
+Run the BM41 vs Monarch vs dense QKV attention experiment:
 
 ```bash
-sbatch amd_scripts/run_bm41_compare.sh
+sbatch amd_scripts/run_qkv_attention_experiment.sh
 ```
 
 The scripts follow the same AMDHPC style as the existing self-forcing script:

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J BM41_Compare       # Job name
+#SBATCH -J QKV_Attn_Exp       # Job name
 #SBATCH -o out/job.%j.out     # Name of stdout output file (%j expands to jobId)
 #SBATCH -e out/job.%j.err     # Name of stderr error file
 #SBATCH -N 1                  # Total number of nodes requested
@@ -23,9 +23,10 @@ fi
 
 conda activate monarch_rt
 
-python scripts/compare_bm41_attention.py \
+python experiments/bm41_qkv/analyze_qkv_attention.py \
   --npz assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz \
   --device cuda \
   --block-size 4 \
   --quick-tokens 4096 \
-  --check-attn-matrix
+  --monarch-iters 1 10 \
+  --attn-slice 0,0
