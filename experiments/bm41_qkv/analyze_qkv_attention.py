@@ -54,17 +54,6 @@ def err_per_head(ref, other, tag):
     print(f"  worst head: h={worst} mae={mae_h[worst].item():.4f}")
 
 
-def monarch_attention(q, k, v, block_size, num_iters):
-    B, H, L, D = q.shape
-    g = block_size
-    macro = g * g
-    R = L // macro
-    pack = lambda x: x.view(B, H, R, g, g, D).permute(0, 2, 3, 4, 1, 5)
-    out = monarch_mod.monarch_attn_slow(
-        pack(q), pack(k), pack(v), D ** -0.5, num_iters=num_iters)
-    return out.permute(0, 4, 1, 2, 3, 5).reshape(B, H, R * macro, D)[:, :, :L]
-
-
 def dense_attn_matrix(q, k):
     logits = torch.matmul(q, k.transpose(-2, -1)) * (q.size(-1) ** -0.5)
     return F.softmax(logits, dim=-1)
@@ -138,8 +127,17 @@ def main():
             ).transpose(1, 2)[:, :, :seq],
         }
         for num_iters in args.monarch_iters:
-            outs[f"MRT-{num_iters}"] = monarch_attention(
-                m_q, m_k, m_v, args.block_size, num_iters)[:, :, :seq]
+            outs[f"MRT-{num_iters}"] = monarch_mod.monarch_attn(
+                m_q.transpose(1, 2),
+                m_k.transpose(1, 2),
+                m_v.transpose(1, 2),
+                f_tied=1,
+                h_reduce=1,
+                w_reduce=1,
+                h=args.block_size,
+                w=args.block_size,
+                num_iters=num_iters,
+            ).transpose(1, 2)[:, :, :seq]
 
         need_attn = bool(args.attn_slice) or bool(args.attn_sample)
         if need_attn:
