@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn.functional as F
 
@@ -64,12 +66,14 @@ def _bm41_w_alpha(q, k, block_size, softmax_scale=None):
     return qr, kr, w, alpha, q_pad, k_pad, q_len, k_len, scale
 
 
-def bm41_attention(q, k, v, block_size=4, softmax_scale=None):
+def bm41_attention(q, k, v, block_size=4, softmax_scale=None, query_block_chunk=None):
     """
     BM41 attention for tensors shaped [B, L, H, D].
 
     The implementation accepts different query/key lengths for KV-cache style
     calls. Padding is masked for keys and cropped from queries before returning.
+    Query blocks are streamed in chunks so small block sizes do not materialize
+    the full [query_blocks, key_blocks] BM41 state.
     """
     if block_size <= 0:
         raise ValueError("block_size must be positive")
@@ -88,15 +92,63 @@ def bm41_attention(q, k, v, block_size=4, softmax_scale=None):
     k_bhld = k.transpose(1, 2).contiguous()
     v_bhld = v.transpose(1, 2).contiguous()
 
-    qr, _, w, alpha, _, k_pad, q_len, _, _ = _bm41_w_alpha(
-        q_bhld, k_bhld, block_size, softmax_scale=softmax_scale)
+    B, H, Lq, D = q_bhld.shape
+    _, _, Lk, _ = k_bhld.shape
+    value_dim = v.size(-1)
+    scale = D ** -0.5 if softmax_scale is None else softmax_scale
+
+    q_bhld, _ = _pad_tokens(q_bhld, block_size)
+    k_bhld, k_pad = _pad_tokens(k_bhld, block_size)
     if k_pad:
         v_bhld = F.pad(v_bhld, (0, 0, 0, k_pad))
-    B, H, _, _, _ = qr.shape
-    value_dim = v.size(-1)
-    vr = v_bhld.view(B, H, -1, block_size, value_dim)
-    out = torch.einsum("bhrtc,bhrcj,bhcjd->bhrtd", alpha, w, vr)
-    out = out.reshape(B, H, -1, value_dim)[:, :, :q_len]
+    Lq_pad, Lk_pad = q_bhld.size(2), k_bhld.size(2)
+    Rq, Rk = Lq_pad // block_size, Lk_pad // block_size
+
+    qr = q_bhld.view(B, H, Rq, block_size, D)
+    kr = k_bhld.view(B, H, Rk, block_size, D)
+    vr = v_bhld.view(B, H, Rk, block_size, value_dim)
+    out_blocks = torch.empty(
+        B, H, Rq, block_size, value_dim, device=q.device, dtype=v.dtype)
+
+    if query_block_chunk is None:
+        query_block_chunk = int(os.environ.get("BM41_QUERY_BLOCK_CHUNK", "64"))
+    query_block_chunk = max(1, int(query_block_chunk))
+
+    key_token_mask, key_block_mask = _key_masks(
+        Lk, Lk_pad, block_size, k.device)
+    key_token_mask = key_token_mask.view(1, 1, 1, Rk, block_size)
+    key_block_mask = key_block_mask.view(1, 1, 1, Rk)
+
+    for start in range(0, Rq, query_block_chunk):
+        end = min(start + query_block_chunk, Rq)
+        q_chunk = qr[:, :, start:end]
+        q_mean = q_chunk.mean(3)
+
+        w_logits = torch.einsum("bhqd,bhksd->bhqks", q_mean, kr) * scale
+        w_logits = w_logits.masked_fill(
+            ~key_token_mask, torch.finfo(w_logits.dtype).min)
+        w = F.softmax(w_logits.float(), dim=-1).to(q.dtype)
+        w = w.masked_fill(~key_token_mask, 0)
+
+        wf = w.float().clamp(min=1e-8)
+        entropy = -(wf * wf.log()).sum(-1)
+        entropy = entropy.masked_fill(
+            ~key_block_mask, torch.finfo(entropy.dtype).min)
+
+        weighted_k = torch.einsum("bhqks,bhksd->bhqkd", w, kr)
+        alpha_logits = (
+            torch.einsum("bhqtd,bhqkd->bhqtk", q_chunk, weighted_k) * scale
+            + entropy.unsqueeze(3)
+        )
+        alpha_logits = alpha_logits.masked_fill(
+            ~key_block_mask.unsqueeze(3), torch.finfo(alpha_logits.dtype).min)
+        alpha = F.softmax(alpha_logits.float(), dim=-1).to(q.dtype)
+
+        weighted_v = torch.einsum("bhqks,bhksd->bhqkd", w, vr)
+        out_blocks[:, :, start:end] = torch.einsum(
+            "bhqtk,bhqkd->bhqtd", alpha, weighted_v)
+
+    out = out_blocks.reshape(B, H, -1, value_dim)[:, :, :Lq]
     return out.transpose(1, 2).contiguous()
 
 
