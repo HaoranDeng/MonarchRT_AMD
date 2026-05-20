@@ -16,6 +16,7 @@ import torch
 import math
 import torch.distributed as dist
 from ..rmsnorm_ops import rmsnorm
+from .bm41_attn import bm41_attention
 from .monarch_attn import monarch_attn, monarch_attn_with_kv_cache
 from .model import build_cos_sin_cache_3d, apply_rope_video_tokens
 
@@ -52,6 +53,8 @@ class CausalWanSelfAttention(nn.Module):
         self.monarch_h_reduce = 1
         self.monarch_w_reduce = 1
         self.monarch_f_tied = 1
+        self.enable_bm41 = False
+        self.bm41_block_size = 32
         
 
         # layers
@@ -96,6 +99,10 @@ class CausalWanSelfAttention(nn.Module):
         roped_query, roped_key = apply_rope_video_tokens(q, k, rope_cache)
 
         if kv_cache is None:
+            if self.enable_bm41:
+                raise ValueError(
+                    "BM41 attention is only supported for causal KV-cache "
+                    "inference; full-sequence causal masks are not supported.")
             if self.enable_monarch:
                 b, _, h, d = roped_query.shape
                 assert self.num_frame_per_block % self.monarch_f_tied == 0
@@ -166,7 +173,16 @@ class CausalWanSelfAttention(nn.Module):
 
             local_start_index = local_end_index - num_new_tokens
 
-            if self.enable_monarch:
+            if self.enable_bm41:
+                kv_cache["k"][:, local_start_index:local_end_index] = roped_key
+                kv_cache["v"][:, local_start_index:local_end_index] = v
+                x = bm41_attention(
+                    roped_query,
+                    kv_cache["k"][:, cache_start:local_end_index],
+                    kv_cache["v"][:, cache_start:local_end_index],
+                    block_size=self.bm41_block_size,
+                )
+            elif self.enable_monarch:
                 assert frame_height % self.monarch_h_reduce == 0 and frame_width % self.monarch_w_reduce == 0 and nframes % self.monarch_f_tied == 0
                 x = monarch_attn_with_kv_cache(
                     roped_query,
@@ -452,6 +468,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         self.enable_monarch = False
         self._monarch_args = {}
+        self._bm41_args = {}
 
         self._num_frame_per_block = 1
         self.independent_first_frame = False
@@ -476,6 +493,20 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             block.self_attn.monarch_f_tied = f_tied
             block.self_attn.monarch_h_reduce = h_reduce
             block.self_attn.monarch_w_reduce = w_reduce
+
+    @property
+    def bm41_args(self):
+        return self._bm41_args
+
+    @bm41_args.setter
+    def bm41_args(self, args: dict):
+        self._bm41_args = args
+        enable = args.get("enable", False)
+        block_size = args.get("block_size", 32)
+
+        for block in self.blocks:
+            block.self_attn.enable_bm41 = enable
+            block.self_attn.bm41_block_size = block_size
     
     @property
     def num_frame_per_block(self):

@@ -17,6 +17,7 @@ class BidirectionalInferencePipeline(torch.nn.Module):
         self.generator = WanDiffusionWrapper(
             **getattr(args, "model_kwargs", {}), is_causal=False, image_or_video_shape=args.image_or_video_shape) if generator is None else generator
         self.generator.model.monarch_args = getattr(args, "monarch_args", {})
+        self.generator.model.bm41_args = getattr(args, "bm41_args", {})
         self.text_encoder = WanTextEncoder() if text_encoder is None else text_encoder
         self.vae = WanVAEWrapper() if vae is None else vae
 

@@ -21,3 +21,7 @@ num_frames: 81
 
 monarch_args:
   enable: false
+
+bm41_args:
+  enable: false
+  block_size: 32

@@ -10,6 +10,7 @@ from einops import repeat
 from ..rmsnorm_ops import rmsnorm
 from .._rocm_runtime import is_rocm
 
+from .bm41_attn import bm41_attention
 from .attention import flash_attention
 from .monarch_attn import monarch_attn
 
@@ -211,6 +212,8 @@ class WanSelfAttention(nn.Module):
         self.monarch_h_reduce = 1
         self.monarch_w_reduce = 1
         self.monarch_f_tied = 1
+        self.enable_bm41 = False
+        self.bm41_block_size = 32
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -242,7 +245,14 @@ class WanSelfAttention(nn.Module):
         q, k, v = qkv_fn(x)
         roped_query, roped_key = apply_rope_video_tokens(q, k, rope_cache)
 
-        if self.enable_monarch:
+        if self.enable_bm41:
+            x = bm41_attention(
+                roped_query,
+                roped_key,
+                v,
+                block_size=self.bm41_block_size,
+            )
+        elif self.enable_monarch:
             f, h, w = grid_size
             b, s, _, d = q.shape
             assert f % self.monarch_f_tied == 0 and h % self.monarch_h_reduce == 0 and w % self.monarch_w_reduce == 0
@@ -678,6 +688,7 @@ class WanModel(ModelMixin, ConfigMixin):
         self.eps = eps
         self.local_attn_size = 21
         self._monarch_args = {}
+        self._bm41_args = {}
 
         # embeddings
         self.patch_embedding = nn.Conv3d(
@@ -736,6 +747,20 @@ class WanModel(ModelMixin, ConfigMixin):
             block.self_attn.monarch_f_tied = f_tied
             block.self_attn.monarch_h_reduce = h_reduce
             block.self_attn.monarch_w_reduce = w_reduce
+
+    @property
+    def bm41_args(self):
+        return self._bm41_args
+
+    @bm41_args.setter
+    def bm41_args(self, args: dict):
+        self._bm41_args = args
+        enable = args.get("enable", False)
+        block_size = args.get("block_size", 32)
+
+        for block in self.blocks:
+            block.self_attn.enable_bm41 = enable
+            block.self_attn.bm41_block_size = block_size
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = value

@@ -43,6 +43,7 @@ class CausalInferencePipeline(torch.nn.Module):
         if self.independent_first_frame:
             self.generator.model.independent_first_frame = True
         self.generator.model.monarch_args = getattr(args, "monarch_args", {})
+        self.generator.model.bm41_args = getattr(args, "bm41_args", {})
 
         video_shape = list(args.image_or_video_shape)
         video_shape = [video_shape[1], video_shape[-2], video_shape[-1]]  # only keep the frame, height, width dimensions

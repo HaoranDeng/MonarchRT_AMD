@@ -28,6 +28,7 @@ class DMD(SelfForcingModel):
             self.generator.enable_gradient_checkpointing()
             self.fake_score.enable_gradient_checkpointing()
         self.generator.model.monarch_args = getattr(args, "monarch_args", {})
+        self.generator.model.bm41_args = getattr(args, "bm41_args", {})
 
         # this will be init later with fsdp-wrapped modules
         self.inference_pipeline: SelfForcingTrainingPipeline = None
