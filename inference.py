@@ -38,6 +38,8 @@ parser.add_argument("--save_with_index", action="store_true",
                     help="Whether to save the video using the index or prompt as the filename")
 parser.add_argument("--use_torch_compile", action="store_true", help="Whether to use torch.compile for inference")
 parser.add_argument("--disable_offload", action="store_true", help="Whether to disable offloading when low memory is detected")
+parser.add_argument("--bm41_block_size", "--bm41-block-size", type=int, default=None,
+                    help="BM41 attention block size. Required when bm41_args.enable is true.")
 args = parser.parse_args()
 
 # Initialize distributed inference
@@ -62,6 +64,10 @@ torch.set_grad_enabled(False)
 config = OmegaConf.load(args.config_path)
 default_config = OmegaConf.load("configs/default_config.yaml")
 config = OmegaConf.merge(default_config, config)
+if args.bm41_block_size is not None:
+    if not hasattr(config, "bm41_args") or config.bm41_args is None:
+        config.bm41_args = {}
+    config.bm41_args.block_size = args.bm41_block_size
 
 # Initialize pipeline
 if hasattr(config, 'denoising_step_list'):

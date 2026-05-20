@@ -66,7 +66,7 @@ def _bm41_w_alpha(q, k, block_size, softmax_scale=None):
     return qr, kr, w, alpha, q_pad, k_pad, q_len, k_len, scale
 
 
-def bm41_attention(q, k, v, block_size=4, softmax_scale=None, query_block_chunk=None):
+def bm41_attention(q, k, v, block_size, softmax_scale=None, query_block_chunk=None):
     """
     BM41 attention for tensors shaped [B, L, H, D].
 
@@ -152,7 +152,7 @@ def bm41_attention(q, k, v, block_size=4, softmax_scale=None, query_block_chunk=
     return out.transpose(1, 2).contiguous()
 
 
-def bm41_attn_matrix(q, k, block_size=4, softmax_scale=None):
+def bm41_attn_matrix(q, k, block_size, softmax_scale=None):
     """Return the amortized BM41 attention matrix for [B, H, L, D] inputs."""
     if q.dim() != 4 or k.dim() != 4:
         raise ValueError("q and k must be rank-4 tensors [B, H, L, D]")

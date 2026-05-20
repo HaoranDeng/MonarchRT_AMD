@@ -96,7 +96,7 @@ def parse_sample(value):
 def main():
     parser = argparse.ArgumentParser(description="Compare dense, BM41, and Monarch attention on saved QKV.")
     parser.add_argument("--npz", type=str, default="assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz")
-    parser.add_argument("--block-size", type=int, default=4)
+    parser.add_argument("--block-size", type=int, required=True)
     parser.add_argument("--quick-tokens", type=int, default=4096)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--monarch-iters", type=int, nargs="+", default=[1, 10])

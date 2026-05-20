@@ -79,7 +79,7 @@ def dense_attn_matrix(q, k):
 def main():
     parser = argparse.ArgumentParser(description="Compare dense attention and BM41 attention.")
     parser.add_argument("--npz", type=str, default="", help="Optional npz with q/k/v arrays shaped [B, H, L, D].")
-    parser.add_argument("--block-size", type=int, default=32)
+    parser.add_argument("--block-size", type=int, required=True)
     parser.add_argument("--quick-tokens", type=int, default=4096)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--batch", type=int, default=2)

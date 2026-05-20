@@ -59,7 +59,7 @@ class CausalWanSelfAttention(nn.Module):
         self.monarch_w_reduce = 1
         self.monarch_f_tied = 1
         self.enable_bm41 = False
-        self.bm41_block_size = 4
+        self.bm41_block_size = None
         self.monarch_compare_to_dense = False
         self.bm41_compare_to_dense = False
         
@@ -529,8 +529,12 @@ class CausalWanModel(ModelMixin, ConfigMixin):
     def bm41_args(self, args: dict):
         self._bm41_args = args
         enable = args.get("enable", False)
-        block_size = args.get("block_size", 4)
+        block_size = args.get("block_size", None)
         compare_to_dense = args.get("compare_to_dense", False)
+        if enable and block_size is None:
+            raise ValueError(
+                "bm41_args.block_size must be set when bm41_args.enable is true. "
+                "Pass it with --bm41_block_size or add it to the config.")
 
         for block in self.blocks:
             block.self_attn.enable_bm41 = enable
