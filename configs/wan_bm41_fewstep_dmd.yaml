@@ -55,9 +55,9 @@ model_kwargs:
   timestep_shift: 5.0
 monarch_args:
   enable: false
-  compare_to_dense: false
+  compare_to_dense: true
 bm41_args:
   enable: true
   block_size: 32
-  compare_to_dense: false
+  compare_to_dense: true
 causal: false

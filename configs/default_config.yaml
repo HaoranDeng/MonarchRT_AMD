@@ -21,9 +21,9 @@ num_frames: 81
 
 monarch_args:
   enable: false
-  compare_to_dense: false
+  compare_to_dense: true
 
 bm41_args:
   enable: false
   block_size: 32
-  compare_to_dense: false
+  compare_to_dense: true
