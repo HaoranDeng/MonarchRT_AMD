@@ -1,6 +1,18 @@
 import numpy as np
 import random
 import torch
+import imageio
+
+
+def save_video(path, video, fps=16):
+    """Save (T, H, W, C) frames in [0, 255] as mp4. Uses imageio (torchvision write_video is unavailable on some builds)."""
+    if isinstance(video, torch.Tensor):
+        video = video.cpu().numpy()
+    video = np.clip(video, 0, 255).astype(np.uint8)
+    writer = imageio.get_writer(path, fps=fps, codec="libx264", quality=8)
+    for frame in video:
+        writer.append_data(frame)
+    writer.close()
 
 
 def set_seed(seed: int, deterministic: bool = False):

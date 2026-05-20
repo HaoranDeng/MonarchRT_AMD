@@ -15,7 +15,7 @@ from torch.distributed.fsdp import ShardingStrategy
 import torch.distributed.checkpoint as dist_cp
 from torch.distributed.checkpoint.state_dict import get_model_state_dict, StateDictOptions
 from torch.distributed.device_mesh import init_device_mesh
-from torchvision.io import write_video
+from utils.misc import save_video
 
 from safetensors.torch import load_file
 
@@ -368,7 +368,7 @@ class Trainer:
                     os.makedirs(output_dir, exist_ok=True)
                     for i, prompt in enumerate(all_prompts):
                         filename = os.path.join(output_dir, f"prompt_{i}_sample_{sample_num}.mp4")
-                        write_video(filename, all_videos[i], fps=16)
+                        save_video(filename, all_videos[i], fps=16)
                         if upload:
                             log_videos.append(wandb.Video(filename, caption=prompt))
                     if upload:

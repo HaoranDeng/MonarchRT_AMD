@@ -4,10 +4,10 @@ import os
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from torchvision import transforms
-from torchvision.io import write_video
+from utils.misc import save_video
 from einops import rearrange
 import torch.distributed as dist
-from torch.utils.data import DataLoader, SequentialSampler
+from torch.utils.data import DataLoader, SequentialSampler, Subset
 from torch.utils.data.distributed import DistributedSampler
 
 from pipeline import (
@@ -32,6 +32,8 @@ parser.add_argument("--i2v", action="store_true", help="Whether to perform I2V (
 parser.add_argument("--use_ema", action="store_true", help="Whether to use EMA parameters")
 parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--num_samples", type=int, default=1, help="Number of samples to generate per prompt")
+parser.add_argument("--max_prompts", type=int, default=10,
+                    help="Maximum number of prompts to run (default: 10). Set to -1 to process the full dataset.")
 parser.add_argument("--save_with_index", action="store_true",
                     help="Whether to save the video using the index or prompt as the filename")
 parser.add_argument("--use_torch_compile", action="store_true", help="Whether to use torch.compile for inference")
@@ -107,6 +109,11 @@ if args.i2v:
     dataset = TextImagePairDataset(args.data_path, transform=transform)
 else:
     dataset = TextDataset(prompt_path=args.data_path, extended_prompt_path=args.extended_prompt_path)
+
+if args.max_prompts >= 0:
+    n = min(args.max_prompts, len(dataset))
+    dataset = Subset(dataset, list(range(n)))
+
 num_prompts = len(dataset)
 print(f"Number of prompts: {num_prompts}")
 
@@ -215,4 +222,4 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
                 output_path = os.path.join(args.output_folder, f'{idx}-{seed_idx}_{model}.mp4')
             else:
                 output_path = os.path.join(args.output_folder, f'{prompt[:100]}-{seed_idx}.mp4')
-            write_video(output_path, video[seed_idx], fps=16)
+            save_video(output_path, video[seed_idx], fps=16)

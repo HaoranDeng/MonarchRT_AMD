@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch
 import math
 import torch.distributed as dist
-from flashinfer.norm import rmsnorm
+from ..rmsnorm_ops import rmsnorm
 from .monarch_attn import monarch_attn, monarch_attn_with_kv_cache
 from .model import build_cos_sin_cache_3d, apply_rope_video_tokens
 

@@ -27,7 +27,6 @@ Create a conda environment and install dependencies:
 conda create -n monarch_rt python=3.10 -y
 conda activate monarch_rt
 pip install -r requirements.txt
-pip install flash-attn --no-build-isolation
 python setup.py develop
 ```
 

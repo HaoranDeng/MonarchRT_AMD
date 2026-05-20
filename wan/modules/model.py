@@ -6,8 +6,10 @@ import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat
-from flashinfer.norm import rmsnorm
 from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
+
+from ..rmsnorm_ops import rmsnorm
+from .._rocm_runtime import is_rocm
 
 from .attention import flash_attention
 from .monarch_attn import monarch_attn
@@ -50,6 +52,63 @@ def build_cos_sin_cache_3d(freqs_t, freqs_h, freqs_w, f, h, w, bsz, start_frame=
     positions = torch.arange(S, device=device, dtype=torch.int32).repeat(bsz)
     return cos_sin_cache, positions
 
+def _rope_rotate_heads(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    *,
+    interleave: bool,
+) -> torch.Tensor:
+    """Rotate the first ``2 * cos.shape[-1]`` channels; matches FlashInfer ``_rotate``."""
+    rotary_dim = cos.shape[-1] * 2
+    x_rot = x[..., :rotary_dim].to(torch.float32)
+    x_pass = x[..., rotary_dim:]
+    if interleave:
+        x1 = x_rot[..., 0::2]
+        x2 = x_rot[..., 1::2]
+        rotated_1 = x1 * cos - x2 * sin
+        rotated_2 = x2 * cos + x1 * sin
+        interleaved = torch.stack([rotated_1, rotated_2], dim=-1)
+        rotated = interleaved.reshape(*x_rot.shape)
+    else:
+        half = rotary_dim // 2
+        x1 = x_rot[..., :half]
+        x2 = x_rot[..., half:]
+        rotated_1 = x1 * cos - x2 * sin
+        rotated_2 = x2 * cos + x1 * sin
+        rotated = torch.cat([rotated_1, rotated_2], dim=-1)
+    if x_pass.numel() == 0:
+        return rotated.to(x.dtype)
+    return torch.cat([rotated.to(x.dtype), x_pass], dim=-1)
+
+
+def _apply_rope_video_tokens_torch(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    positions: torch.Tensor,
+    *,
+    is_neox: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """PyTorch RoPE matching FlashInfer layout: flatten heads to ``(nnz, 1, H*D)``."""
+    B, S, H, D = q.shape
+    nnz = B * S
+    rotary_dim = cos_sin_cache.shape[-1]
+    cos_cache = cos_sin_cache[:, : rotary_dim // 2]
+    sin_cache = cos_sin_cache[:, rotary_dim // 2 :]
+    pos = positions.to(device=cos_sin_cache.device, dtype=torch.long)
+    if pos.numel() != nnz:
+        pos = pos[:nnz]
+    cos = cos_cache.index_select(0, pos).unsqueeze(1)
+    sin = sin_cache.index_select(0, pos).unsqueeze(1)
+    # Same view as ``apply_rope_with_cos_sin_cache_inplace``: (nnz, H*D) -> (nnz, 1, H*D).
+    q_view = q.reshape(nnz, 1, H * D)
+    k_view = k.reshape(nnz, 1, H * D)
+    q_out = _rope_rotate_heads(q_view, cos, sin, interleave=not is_neox)
+    k_out = _rope_rotate_heads(k_view, cos, sin, interleave=not is_neox)
+    return q_out.view(B, S, H, D), k_out.view(B, S, H, D)
+
+
 def apply_rope_video_tokens(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -60,29 +119,10 @@ def apply_rope_video_tokens(
     cos_sin_cache, positions = rope_cache
     B, S, H, D = q.shape
 
-    if torch.is_grad_enabled() or q.requires_grad or k.requires_grad:
-        gathered = cos_sin_cache.index_select(0, positions)
-        cos = gathered[:, :D].to(dtype=q.dtype).view(B*S, 1, D)
-        sin = gathered[:, D:].to(dtype=q.dtype).view(B*S, 1, D)
-
-        q_ = q.reshape(B*S, H, D)
-        k_ = k.reshape(B*S, H, D)
-
-        if is_neox:
-            half = D // 2
-            q1, q2 = q_[..., :half], q_[..., half:]
-            k1, k2 = k_[..., :half], k_[..., half:]
-            cos1, sin1 = cos[..., :half], sin[..., :half]
-            q_out = torch.cat([q1 * cos1 - q2 * sin1, q1 * sin1 + q2 * cos1], dim=-1)
-            k_out = torch.cat([k1 * cos1 - k2 * sin1, k1 * sin1 + k2 * cos1], dim=-1)
-        else:
-            q_even, q_odd = q_[..., ::2], q_[..., 1::2]
-            k_even, k_odd = k_[..., ::2], k_[..., 1::2]
-            cosh, sinh = cos[..., ::2], sin[..., ::2]
-            q_out = torch.stack([q_even * cosh - q_odd * sinh, q_even * sinh + q_odd * cosh], dim=-1).flatten(-2)
-            k_out = torch.stack([k_even * cosh - k_odd * sinh, k_even * sinh + k_odd * cosh], dim=-1).flatten(-2)
-
-        return q_out.view(B, S, H, D), k_out.view(B, S, H, D)
+    if torch.is_grad_enabled() or q.requires_grad or k.requires_grad or is_rocm():
+        return _apply_rope_video_tokens_torch(
+            q, k, cos_sin_cache, positions, is_neox=is_neox
+        )
 
     q2 = q.reshape(B * S, H * D).contiguous()
     k2 = k.reshape(B * S, H * D).contiguous()

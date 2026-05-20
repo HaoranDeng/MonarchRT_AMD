@@ -8,12 +8,13 @@ import triton.language as tl
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 def _is_cuda():
+    """True when Triton targets NVIDIA CUDA (not ROCm/HIP-only builds)."""
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 def _supports_host_descriptor():
     return _is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
-assert triton.runtime.driver.active.get_current_target().backend == "cuda"
+# Host-side tensor descriptors are CUDA Hopper+ only; on ROCm (backend "hip") this stays False.
 supports_host_descriptor = _supports_host_descriptor()
 
 @triton.jit
