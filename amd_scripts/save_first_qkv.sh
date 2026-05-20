@@ -24,10 +24,14 @@ fi
 conda activate monarch_rt
 
 export MONARCHRT_SAVE_FIRST_QKV_PATH=assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz
+OUTPUT_FOLDER="videos/qkv_capture"
+
+mkdir -p "${OUTPUT_FOLDER}"
+find "${OUTPUT_FOLDER}" -mindepth 1 -delete
 
 python inference.py \
   --config_path configs/self_forcing_dmd.yaml \
-  --output_folder videos/qkv_capture \
+  --output_folder "${OUTPUT_FOLDER}" \
   --checkpoint_path checkpoints/self_forcing_dmd.pt \
   --data_path prompts/MovieGenVideoBench_extended.txt \
   --max_prompts 1 \
