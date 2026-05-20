@@ -42,10 +42,13 @@ def maybe_print_dense_attention_mae(tag, actual, q, k, v, enabled, block_causal_
         return
     with torch.no_grad():
         ref = dense_attention_reference(q, k, v, block_causal_size=block_causal_size)
-        mae = (actual.float() - ref.float()).abs().mean()
+        abs_err = (actual.float() - ref.float()).abs()
+        mae = abs_err.mean()
+        rel_mae = mae / ref.float().abs().mean().clamp(min=1e-8) * 100
     if (not dist.is_initialized()) or dist.get_rank() == 0:
         print(
-            f"[compare_to_dense] {tag}: mae={mae.item():.6f} "
+            f"[compare_to_dense] {tag}: mae={mae.item():.4f} "
+            f"rel_mae={rel_mae.item():.4f}% "
             f"shape={tuple(actual.shape)}"
         )
 
