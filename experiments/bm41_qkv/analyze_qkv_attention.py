@@ -116,7 +116,6 @@ def main():
         q, k, v = (t[:, :, :args.quick_tokens] for t in (q, k, v))
     seq = q.size(2)
 
-    bm_q, bm_k, bm_v = (pad_blk(t, args.block_size) for t in (q, k, v))
     monarch_block = args.block_size * args.block_size
     m_q, m_k, m_v = (pad_blk(t, monarch_block) for t in (q, k, v))
 
@@ -124,9 +123,9 @@ def main():
         out_dense = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
         outs = {
             "BM41": bm41_mod.bm41_attention(
-                bm_q.transpose(1, 2),
-                bm_k.transpose(1, 2),
-                bm_v.transpose(1, 2),
+                q.transpose(1, 2),
+                k.transpose(1, 2),
+                v.transpose(1, 2),
                 block_size=args.block_size,
             ).transpose(1, 2)[:, :, :seq],
         }
@@ -147,7 +146,7 @@ def main():
         if need_attn:
             A_dense = dense_attn_matrix(q, k)
             A_bm41 = bm41_mod.bm41_attn_matrix(
-                bm_q, bm_k, block_size=args.block_size)[:, :, :seq, :seq]
+                q, k, block_size=args.block_size)[:, :, :seq, :seq]
 
     print(
         f"device={args.device} seq={seq} heads={q.size(1)} dim={q.size(-1)} "

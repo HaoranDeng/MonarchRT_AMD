@@ -22,6 +22,12 @@ def _key_masks(length, padded_length, block_size, device):
     return block_mask, block_mask.any(dim=-1)
 
 
+def _masked_block_mean(x, token_mask):
+    mask = token_mask.view(1, 1, token_mask.size(0), token_mask.size(1), 1)
+    denom = mask.sum(dim=3).clamp(min=1)
+    return (x * mask.to(dtype=x.dtype)).sum(dim=3) / denom.to(dtype=x.dtype)
+
+
 def _bm41_w_alpha(q, k, block_size, softmax_scale=None):
     B, H, Lq, D = q.shape
     _, _, Lk, _ = k.shape
@@ -36,10 +42,11 @@ def _bm41_w_alpha(q, k, block_size, softmax_scale=None):
     qr = q.view(B, H, Rq, block_size, D)
     kr = k.view(B, H, Rk, block_size, D)
 
+    q_token_mask, _ = _key_masks(q_len, Lq_pad, block_size, q.device)
     key_token_mask, key_block_mask = _key_masks(
         k_len, Lk_pad, block_size, k.device)
     w_logits = torch.einsum(
-        "bhrd,bhcsd->bhrcs", qr.mean(3), kr) * scale
+        "bhrd,bhcsd->bhrcs", _masked_block_mean(qr, q_token_mask), kr) * scale
     w_logits = w_logits.masked_fill(
         ~key_token_mask.view(1, 1, 1, Rk, block_size),
         torch.finfo(w_logits.dtype).min,
@@ -116,13 +123,14 @@ def bm41_attention(q, k, v, block_size, softmax_scale=None, query_block_chunk=No
 
     key_token_mask, key_block_mask = _key_masks(
         Lk, Lk_pad, block_size, k.device)
+    query_token_mask, _ = _key_masks(Lq, Lq_pad, block_size, q.device)
     key_token_mask = key_token_mask.view(1, 1, 1, Rk, block_size)
     key_block_mask = key_block_mask.view(1, 1, 1, Rk)
 
     for start in range(0, Rq, query_block_chunk):
         end = min(start + query_block_chunk, Rq)
         q_chunk = qr[:, :, start:end]
-        q_mean = q_chunk.mean(3)
+        q_mean = _masked_block_mean(q_chunk, query_token_mask[start:end])
 
         w_logits = torch.einsum("bhqd,bhksd->bhqks", q_mean, kr) * scale
         w_logits = w_logits.masked_fill(
