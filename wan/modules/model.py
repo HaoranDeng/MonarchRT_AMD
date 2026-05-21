@@ -76,6 +76,8 @@ def maybe_save_first_attention_qkv(q, k, v, tag):
     import numpy as np
     np.savez(path, **payload)
     print(f"[qkv_capture] saved first attention q/k/v to {path} tag={tag} shape={tuple(q.shape)}")
+    if os.environ.get("MONARCHRT_EXIT_AFTER_QKV_SAVE", "").lower() in {"1", "true", "yes"}:
+        raise SystemExit(0)
 
 
 def sinusoidal_embedding_1d(dim, position):

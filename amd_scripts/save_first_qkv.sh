@@ -23,16 +23,19 @@ fi
 
 conda activate monarch_rt
 
+BM41_BLOCK_SIZE="${BM41_BLOCK_SIZE:-4}"
 export MONARCHRT_SAVE_FIRST_QKV_PATH=assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz
+export MONARCHRT_EXIT_AFTER_QKV_SAVE=1
 OUTPUT_FOLDER="videos/qkv_capture"
 
 mkdir -p "${OUTPUT_FOLDER}"
 find "${OUTPUT_FOLDER}" -mindepth 1 -delete
 
 python inference.py \
-  --config_path configs/self_forcing_dmd.yaml \
+  --config_path configs/wan_bm41_fewstep_dmd.yaml \
   --output_folder "${OUTPUT_FOLDER}" \
   --checkpoint_path checkpoints/self_forcing_dmd.pt \
   --data_path prompts/MovieGenVideoBench_extended.txt \
   --max_prompts 1 \
+  --bm41_block_size "${BM41_BLOCK_SIZE}" \
   --use_ema

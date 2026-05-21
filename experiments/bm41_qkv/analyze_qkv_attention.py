@@ -27,6 +27,8 @@ def pad_blk(x, block_size):
 
 
 def err(ref, other, tag):
+    ref = ref.float()
+    other = other.float()
     d = (ref - other).abs()
     r = ref.abs().clamp(min=1e-8)
     mae = d.mean().item()
@@ -37,6 +39,8 @@ def err(ref, other, tag):
 
 
 def err_per_head(ref, other, tag):
+    ref = ref.float()
+    other = other.float()
     d = (ref - other).abs()
     r = ref.abs().clamp(min=1e-8)
     mae_h = d.mean(dim=(0, 2, 3))
@@ -97,10 +101,10 @@ def main():
     parser = argparse.ArgumentParser(description="Compare dense, BM41, and Monarch attention on saved QKV.")
     parser.add_argument("--npz", type=str, default="assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz")
     parser.add_argument("--block-size", type=int, required=True)
-    parser.add_argument("--quick-tokens", type=int, default=4096)
+    parser.add_argument("--quick-tokens", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--monarch-iters", type=int, nargs="+", default=[1, 10])
-    parser.add_argument("--attn-slice", type=str, default="0,0", help="b,h or empty to skip")
+    parser.add_argument("--attn-slice", type=str, default="", help="b,h or empty to skip")
     parser.add_argument("--attn-sample", type=str, default="", help="b,h,r0,r1,c0,c1")
     args = parser.parse_args()
 

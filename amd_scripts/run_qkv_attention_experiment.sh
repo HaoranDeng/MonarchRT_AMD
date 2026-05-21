@@ -23,10 +23,12 @@ fi
 
 conda activate monarch_rt
 
+BM41_BLOCK_SIZE="${BM41_BLOCK_SIZE:-4}"
+QUICK_TOKENS="${QUICK_TOKENS:-0}"
+
 python experiments/bm41_qkv/analyze_qkv_attention.py \
   --npz assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz \
   --device cuda \
-  --block-size 4 \
-  --quick-tokens 4096 \
-  --monarch-iters 1 10 \
-  --attn-slice 0,0
+  --block-size "${BM41_BLOCK_SIZE}" \
+  --quick-tokens "${QUICK_TOKENS}" \
+  --monarch-iters 1 10

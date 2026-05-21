@@ -25,6 +25,8 @@ def pad_blk(x, block_size):
 
 
 def err(ref, other, tag):
+    ref = ref.float()
+    other = other.float()
     d = (ref - other).abs()
     r = ref.abs().clamp(min=1e-8)
     mae = d.mean().item()
@@ -35,6 +37,8 @@ def err(ref, other, tag):
 
 
 def err_per_head(ref, other, tag):
+    ref = ref.float()
+    other = other.float()
     d = (ref - other).abs()
     r = ref.abs().clamp(min=1e-8)
     mae_h = d.mean(dim=(0, 2, 3))
