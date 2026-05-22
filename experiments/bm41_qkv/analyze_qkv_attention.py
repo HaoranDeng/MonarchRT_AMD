@@ -130,6 +130,7 @@ def main():
         q, k, v = (t[:, :, :args.quick_tokens] for t in (q, k, v))
     seq = q.size(2)
     monarch_frames = infer_wan_video_frames(seq)
+    grid_size = (monarch_frames, WAN_GRID_HEIGHT, WAN_GRID_WIDTH)
 
     with torch.no_grad():
         out_dense = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
@@ -139,6 +140,7 @@ def main():
                 k.transpose(1, 2),
                 v.transpose(1, 2),
                 block_size=args.block_size,
+                grid_size=grid_size,
             ).transpose(1, 2)[:, :, :seq],
         }
         monarch_mod = load_module(
@@ -160,7 +162,7 @@ def main():
         if need_attn:
             A_dense = dense_attn_matrix(q, k)
             A_bm41 = bm41_mod.bm41_attn_matrix(
-                q, k, block_size=args.block_size)[:, :, :seq, :seq]
+                q, k, block_size=args.block_size, grid_size=grid_size)[:, :, :seq, :seq]
 
     print(
         f"device={args.device} seq={seq} heads={q.size(1)} dim={q.size(-1)} "

@@ -317,6 +317,7 @@ class WanSelfAttention(nn.Module):
                 roped_key,
                 v,
                 block_size=self.bm41_block_size,
+                grid_size=grid_size,
             )
             maybe_print_dense_attention_mae(
                 "bm41", x, roped_query, roped_key, v,
