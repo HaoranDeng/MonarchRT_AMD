@@ -6,7 +6,7 @@
 #SBATCH -N 1                  # Total number of nodes requested
 #SBATCH -n 8                  # Total number of mpi tasks requested
 #SBATCH -t 4:00:00            # Run time (hh:mm:ss) - 4 hours
-#SBATCH -p mi3001x            # Desired partition
+#SBATCH -p mi2101x            # Desired partition
 
 set -euo pipefail
 

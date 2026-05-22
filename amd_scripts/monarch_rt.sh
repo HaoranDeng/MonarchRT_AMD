@@ -6,7 +6,7 @@
 #SBATCH -N 1
 #SBATCH -n 8
 #SBATCH -t 4:00:00
-#SBATCH -p mi3001x
+#SBATCH -p mi2101x
 
 set -euo pipefail
 
