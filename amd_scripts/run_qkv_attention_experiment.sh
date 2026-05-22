@@ -24,28 +24,8 @@ fi
 conda activate monarch_rt
 
 BM41_BLOCK_SIZE="${BM41_BLOCK_SIZE:-4}"
-QUICK_TOKENS="${QUICK_TOKENS:-0}"
-MONARCH_ITERS="${MONARCH_ITERS:-}"
-GRID_HEIGHT="${GRID_HEIGHT:-30}"
-GRID_WIDTH="${GRID_WIDTH:-52}"
-MONARCH_F_TIED="${MONARCH_F_TIED:-1}"
-MONARCH_H_REDUCE="${MONARCH_H_REDUCE:-1}"
-MONARCH_W_REDUCE="${MONARCH_W_REDUCE:-1}"
-
-EXTRA_ARGS=()
-if [ -n "${MONARCH_ITERS}" ]; then
-  # shellcheck disable=SC2206
-  EXTRA_ARGS+=(--monarch-iters ${MONARCH_ITERS})
-fi
 
 python experiments/bm41_qkv/analyze_qkv_attention.py \
   --npz assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz \
   --device cuda \
-  --block-size "${BM41_BLOCK_SIZE}" \
-  --quick-tokens "${QUICK_TOKENS}" \
-  --grid-height "${GRID_HEIGHT}" \
-  --grid-width "${GRID_WIDTH}" \
-  --monarch-f-tied "${MONARCH_F_TIED}" \
-  --monarch-h-reduce "${MONARCH_H_REDUCE}" \
-  --monarch-w-reduce "${MONARCH_W_REDUCE}" \
-  "${EXTRA_ARGS[@]}"
+  --block-size "${BM41_BLOCK_SIZE}"

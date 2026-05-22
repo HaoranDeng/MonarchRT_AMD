@@ -19,10 +19,12 @@ def load_module(name, path):
 
 bm41_mod = load_module("bm41_attn", ROOT / "wan" / "modules" / "bm41_attn.py")
 
-
-def pad_blk(x, block_size):
-    pad = (-x.size(2)) % block_size
-    return F.pad(x, (0, 0, 0, pad)) if pad else x
+WAN_GRID_HEIGHT = 30
+WAN_GRID_WIDTH = 52
+MONARCH_F_TIED = 1
+MONARCH_H_REDUCE = 1
+MONARCH_W_REDUCE = 1
+MONARCH_ITERS = (1,)
 
 
 def err(ref, other, tag):
@@ -96,17 +98,17 @@ def parse_sample(value):
     return parts
 
 
-def infer_video_frames(seq, height, width, f_tied):
-    frame_tokens = height * width
+def infer_wan_video_frames(seq):
+    frame_tokens = WAN_GRID_HEIGHT * WAN_GRID_WIDTH
     if seq % frame_tokens != 0:
         raise ValueError(
-            f"sequence length {seq} is not divisible by grid height*width "
-            f"({height}*{width}={frame_tokens}). Use --quick-tokens with a "
-            "whole-frame token count or adjust --grid-height/--grid-width.")
+            f"sequence length {seq} is not divisible by Wan grid tokens "
+            f"({WAN_GRID_HEIGHT}*{WAN_GRID_WIDTH}={frame_tokens}).")
     frames = seq // frame_tokens
-    if frames % f_tied != 0:
+    if frames % MONARCH_F_TIED != 0:
         raise ValueError(
-            f"inferred frame count {frames} is not divisible by f_tied={f_tied}.")
+            f"inferred frame count {frames} is not divisible by "
+            f"f_tied={MONARCH_F_TIED}.")
     return frames
 
 
@@ -116,18 +118,6 @@ def main():
     parser.add_argument("--block-size", type=int, required=True)
     parser.add_argument("--quick-tokens", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument(
-        "--monarch-iters",
-        type=int,
-        nargs="*",
-        default=[],
-        help="Optional Monarch iteration counts. Keep empty for full-length QKV because monarch_attn_slow materializes large intermediates.",
-    )
-    parser.add_argument("--grid-height", type=int, default=30, help="Patch-grid height used by WanModel self-attention.")
-    parser.add_argument("--grid-width", type=int, default=52, help="Patch-grid width used by WanModel self-attention.")
-    parser.add_argument("--monarch-f-tied", type=int, default=1)
-    parser.add_argument("--monarch-h-reduce", type=int, default=1)
-    parser.add_argument("--monarch-w-reduce", type=int, default=1)
     parser.add_argument("--attn-slice", type=str, default="", help="b,h or empty to skip")
     parser.add_argument("--attn-sample", type=str, default="", help="b,h,r0,r1,c0,c1")
     args = parser.parse_args()
@@ -139,11 +129,7 @@ def main():
     if args.quick_tokens:
         q, k, v = (t[:, :, :args.quick_tokens] for t in (q, k, v))
     seq = q.size(2)
-
-    monarch_frames = None
-    if args.monarch_iters:
-        monarch_frames = infer_video_frames(
-            seq, args.grid_height, args.grid_width, args.monarch_f_tied)
+    monarch_frames = infer_wan_video_frames(seq)
 
     with torch.no_grad():
         out_dense = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
@@ -155,20 +141,18 @@ def main():
                 block_size=args.block_size,
             ).transpose(1, 2)[:, :, :seq],
         }
-        monarch_mod = None
-        for num_iters in args.monarch_iters:
-            if monarch_mod is None:
-                monarch_mod = load_module(
-                    "monarch_attn", ROOT / "wan" / "modules" / "monarch_attn.py")
+        monarch_mod = load_module(
+            "monarch_attn", ROOT / "wan" / "modules" / "monarch_attn.py")
+        for num_iters in MONARCH_ITERS:
             outs[f"MRT-{num_iters}"] = monarch_mod.monarch_attn(
                 q.transpose(1, 2),
                 k.transpose(1, 2),
                 v.transpose(1, 2),
-                f_tied=args.monarch_f_tied,
-                h_reduce=args.monarch_h_reduce,
-                w_reduce=args.monarch_w_reduce,
-                h=args.grid_height,
-                w=args.grid_width,
+                f_tied=MONARCH_F_TIED,
+                h_reduce=MONARCH_H_REDUCE,
+                w_reduce=MONARCH_W_REDUCE,
+                h=WAN_GRID_HEIGHT,
+                w=WAN_GRID_WIDTH,
                 num_iters=num_iters,
             ).transpose(1, 2)[:, :, :seq]
 
@@ -182,12 +166,11 @@ def main():
         f"device={args.device} seq={seq} heads={q.size(1)} dim={q.size(-1)} "
         f"bm41_bs={args.block_size}"
     )
-    if monarch_frames is not None:
-        print(
-            f"mrt_grid=({monarch_frames},{args.grid_height},{args.grid_width}) "
-            f"f_tied={args.monarch_f_tied} h_reduce={args.monarch_h_reduce} "
-            f"w_reduce={args.monarch_w_reduce}"
-        )
+    print(
+        f"mrt_grid=({monarch_frames},{WAN_GRID_HEIGHT},{WAN_GRID_WIDTH}) "
+        f"f_tied={MONARCH_F_TIED} h_reduce={MONARCH_H_REDUCE} "
+        f"w_reduce={MONARCH_W_REDUCE}"
+    )
     if "tag" in data:
         print(f"capture_tag={data['tag']}")
 
