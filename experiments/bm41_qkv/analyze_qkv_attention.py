@@ -18,7 +18,6 @@ def load_module(name, path):
 
 
 bm41_mod = load_module("bm41_attn", ROOT / "wan" / "modules" / "bm41_attn.py")
-monarch_mod = load_module("monarch_attn", ROOT / "wan" / "modules" / "monarch_attn.py")
 
 
 def pad_blk(x, block_size):
@@ -103,7 +102,13 @@ def main():
     parser.add_argument("--block-size", type=int, required=True)
     parser.add_argument("--quick-tokens", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--monarch-iters", type=int, nargs="+", default=[1, 10])
+    parser.add_argument(
+        "--monarch-iters",
+        type=int,
+        nargs="*",
+        default=[],
+        help="Optional Monarch iteration counts. Keep empty for full-length QKV because monarch_attn_slow materializes large intermediates.",
+    )
     parser.add_argument("--attn-slice", type=str, default="", help="b,h or empty to skip")
     parser.add_argument("--attn-sample", type=str, default="", help="b,h,r0,r1,c0,c1")
     args = parser.parse_args()
@@ -129,7 +134,11 @@ def main():
                 block_size=args.block_size,
             ).transpose(1, 2)[:, :, :seq],
         }
+        monarch_mod = None
         for num_iters in args.monarch_iters:
+            if monarch_mod is None:
+                monarch_mod = load_module(
+                    "monarch_attn", ROOT / "wan" / "modules" / "monarch_attn.py")
             outs[f"MRT-{num_iters}"] = monarch_mod.monarch_attn(
                 m_q.transpose(1, 2),
                 m_k.transpose(1, 2),
