@@ -49,36 +49,51 @@ def _restore_tokens(x, f_tied, h_reduce, w_reduce):
     )
 
 
-def _bm41_factors(q, k, scale):
+def _monarch_one_step_factors(q, k, scale, initial_l):
     """
-    Compute BM41 factors in the MonarchRT block family.
+    Compute one MonarchAttention R/L update with a chosen initial L.
 
     q has shape [B, A, I, J, H, D] and k has shape [B, F, K, L, H, D].
-    The Monarch rank-one block is indexed by (a, f, j, k), with row index i
-    and column index l. BM41 differs from MRT-1 only by using mean_i(q) to
-    initialize beta/R instead of the identity-selected q[..., k, j].
+    Standard MRT-1 uses identity L^(0), so a_R[..., k, j] is q[..., k, j].
+    BM41 changes only L^(0) to uniform along I, so each k uses mean_I(q).
     """
-    q_mean = q.mean(dim=2)
-    beta_logits = torch.einsum("bajnd,bfklnd->bnafjkl", q_mean, k) * scale
-    beta = F.softmax(beta_logits.float(), dim=-1).to(q.dtype)
+    if q.size(2) != k.size(2):
+        raise ValueError(
+            "one-step Monarch initialization requires matching I/K block sizes."
+        )
+    if initial_l == "identity":
+        a_r = q
+    elif initial_l == "uniform":
+        a_r = q.mean(dim=2, keepdim=True).expand(
+            -1, -1, k.size(2), -1, -1, -1
+        )
+    else:
+        raise ValueError(f"unsupported initial_l={initial_l!r}.")
 
-    beta_float = beta.float().clamp_min(torch.finfo(torch.float32).tiny)
-    entropy = -(beta_float * beta_float.log()).sum(dim=-1)
-    compressed_k = torch.einsum("bnafjkl,bfklnd->bafjknd", beta, k)
+    r_logits = torch.einsum("bakjnd,bfklnd->bnafjkl", a_r, k) * scale
+    r = F.softmax(r_logits.float(), dim=-1).to(q.dtype)
 
-    alpha_logits = (
-        torch.einsum("baijnd,bafjknd->bnafjki", q, compressed_k) * scale
-        + entropy.unsqueeze(-1)
+    r_float = r.float().clamp_min(torch.finfo(torch.float32).tiny)
+    c_l = (r_float * r_float.log()).sum(dim=-1)
+    a_l = torch.einsum("bnafjkl,bfklnd->bafjknd", r, k)
+
+    l_logits = (
+        torch.einsum("baijnd,bafjknd->bnafjki", q, a_l) * scale
+        - c_l.unsqueeze(-1)
     )
-    alpha = rearrange(alpha_logits, "b n a f j k i -> b n a j i (f k)")
-    alpha = F.softmax(alpha.float(), dim=-1).to(q.dtype)
-    alpha = rearrange(
-        alpha,
+    l = rearrange(l_logits, "b n a f j k i -> b n a j i (f k)")
+    l = F.softmax(l.float(), dim=-1).to(q.dtype)
+    l = rearrange(
+        l,
         "b n a j i (f k) -> b n a f j k i",
         f=k.size(1),
         k=k.size(2),
     )
-    return beta, alpha
+    return r, l
+
+
+def _bm41_factors(q, k, scale):
+    return _monarch_one_step_factors(q, k, scale, initial_l="uniform")
 
 
 def _bm41_attention_blocks(q, k, v, scale, query_outer_chunk):
@@ -103,10 +118,10 @@ def _bm41_attention_blocks(q, k, v, scale, query_outer_chunk):
 
     for start in range(0, outer_q, query_outer_chunk):
         end = min(start + query_outer_chunk, outer_q)
-        beta, alpha = _bm41_factors(q[:, start:end], k, scale)
-        compressed_v = torch.einsum("bnafjkl,bfklne->bafjkne", beta, v)
+        r, l = _bm41_factors(q[:, start:end], k, scale)
+        compressed_v = torch.einsum("bnafjkl,bfklne->bafjkne", r, v)
         out[:, start:end] = torch.einsum(
-            "bnafjki,bafjkne->baijne", alpha, compressed_v
+            "bnafjki,bafjkne->baijne", l, compressed_v
         )
     return out
 
@@ -126,10 +141,9 @@ def bm41_attention(
     """
     BM41 attention for tensors shaped [B, L, H, D].
 
-    The block layout is identical to ``monarch_attn``. Within each Monarch
-    rank-one block, BM41 uses the mean query over the block row dimension to
-    create one compressed key/value token, then attends to compressed tokens
-    using the entropy correction from the variational objective.
+    The block layout and one-step R/L updates are identical to ``monarch_attn``.
+    BM41 changes only the initial L: instead of MRT-1's identity L^(0), it
+    uses a uniform L^(0), which supplies mean_I(q) to the initial R update.
     """
     if q.dim() != 4 or k.dim() != 4 or v.dim() != 4:
         raise ValueError("q, k, and v must be rank-4 tensors [B, L, H, D].")
@@ -180,10 +194,10 @@ def bm41_attn_matrix(
     k_blhd = k.transpose(1, 2).contiguous()
     q_blocks = _rearrange_tokens(q_blhd, f_tied, h_reduce, w_reduce, h, w)
     k_blocks = _rearrange_tokens(k_blhd, f_tied, h_reduce, w_reduce, h, w)
-    beta, alpha = _bm41_factors(q_blocks, k_blocks, scale)
+    r, l = _bm41_factors(q_blocks, k_blocks, scale)
 
     ordered = rearrange(
-        alpha.unsqueeze(-1) * beta.unsqueeze(-2),
+        l.unsqueeze(-1) * r.unsqueeze(-2),
         "b n a f j k i l -> b n (a i j) (f k l)",
     )
     q_order = _rearranged_token_order(
