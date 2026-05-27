@@ -23,9 +23,6 @@ fi
 
 conda activate monarch_rt
 
-BM41_BLOCK_SIZE="${BM41_BLOCK_SIZE:-4}"
-
 python experiments/bm41_qkv/analyze_qkv_attention.py \
   --npz assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz \
-  --device cuda \
-  --block-size "${BM41_BLOCK_SIZE}"
+  --device cuda

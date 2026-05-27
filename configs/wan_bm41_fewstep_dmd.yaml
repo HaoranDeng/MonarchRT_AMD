@@ -59,4 +59,7 @@ monarch_args:
 bm41_args:
   enable: true
   compare_to_dense: true
+  f_tied: 1
+  h_reduce: 1
+  w_reduce: 1
 causal: false

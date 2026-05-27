@@ -19,11 +19,6 @@ bm41_attention = bm41_attn.bm41_attention
 bm41_attn_matrix = bm41_attn.bm41_attn_matrix
 
 
-def pad_blk(x, block_size):
-    pad = (-x.size(2)) % block_size
-    return F.pad(x, (0, 0, 0, pad)) if pad else x
-
-
 def err(ref, other, tag):
     ref = ref.float()
     other = other.float()
@@ -83,12 +78,16 @@ def dense_attn_matrix(q, k):
 def main():
     parser = argparse.ArgumentParser(description="Compare dense attention and BM41 attention.")
     parser.add_argument("--npz", type=str, default="", help="Optional npz with q/k/v arrays shaped [B, H, L, D].")
-    parser.add_argument("--block-size", type=int, required=True)
-    parser.add_argument("--quick-tokens", type=int, default=4096)
+    parser.add_argument("--quick-tokens", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--batch", type=int, default=2)
     parser.add_argument("--heads", type=int, default=4)
     parser.add_argument("--tokens", type=int, default=512)
+    parser.add_argument("--height", type=int, default=16)
+    parser.add_argument("--width", type=int, default=32)
+    parser.add_argument("--f-tied", type=int, default=1)
+    parser.add_argument("--h-reduce", type=int, default=1)
+    parser.add_argument("--w-reduce", type=int, default=1)
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--check-attn-matrix", action="store_true")
@@ -99,6 +98,19 @@ def main():
 
     q, k, v = load_qkv(args, args.device)
     seq = q.size(2)
+    frame_tokens = args.height * args.width
+    if seq % frame_tokens or (seq // frame_tokens) % args.f_tied:
+        raise ValueError(
+            f"sequence length {seq} does not fit the Monarch layout "
+            f"f_tied={args.f_tied}, h={args.height}, w={args.width}."
+        )
+    bm41_cfg = dict(
+        f_tied=args.f_tied,
+        h_reduce=args.h_reduce,
+        w_reduce=args.w_reduce,
+        h=args.height,
+        w=args.width,
+    )
 
     with torch.no_grad():
         out_dense = F.scaled_dot_product_attention(
@@ -107,12 +119,12 @@ def main():
             q.transpose(1, 2),
             k.transpose(1, 2),
             v.transpose(1, 2),
-            block_size=args.block_size,
+            **bm41_cfg,
         ).transpose(1, 2)
 
         print(
             f"device={args.device} seq={seq} heads={q.size(1)} "
-            f"dim={q.size(-1)} bm41_block_size={args.block_size}"
+            f"dim={q.size(-1)} shared_monarch_blocks={bm41_cfg}"
         )
         print("\n=== output error vs dense ===")
         err(out_dense, out_bm41, "dense vs BM41")
@@ -121,7 +133,7 @@ def main():
         if args.check_attn_matrix:
             print("\n=== attention matrix error vs dense ===")
             A_dense = dense_attn_matrix(q, k)
-            A_bm41 = bm41_attn_matrix(q, k, block_size=args.block_size)
+            A_bm41 = bm41_attn_matrix(q, k, **bm41_cfg)
             err(A_dense, A_bm41, "dense attn vs BM41 attn")
 
 

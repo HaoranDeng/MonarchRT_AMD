@@ -23,7 +23,6 @@ fi
 
 conda activate monarch_rt
 
-BM41_BLOCK_SIZE="${BM41_BLOCK_SIZE:-4}"
 OUTPUT_FOLDER="videos/bm41"
 
 mkdir -p "${OUTPUT_FOLDER}"
@@ -35,5 +34,4 @@ python inference.py \
   --checkpoint_path checkpoints/self_forcing_dmd.pt \
   --data_path prompts/MovieGenVideoBench_extended.txt \
   --max_prompts 10 \
-  --bm41_block_size "${BM41_BLOCK_SIZE}" \
   --use_ema

@@ -276,7 +276,9 @@ class WanSelfAttention(nn.Module):
         self.monarch_w_reduce = 1
         self.monarch_f_tied = 1
         self.enable_bm41 = False
-        self.bm41_block_size = None
+        self.bm41_h_reduce = 1
+        self.bm41_w_reduce = 1
+        self.bm41_f_tied = 1
         self.monarch_compare_to_dense = False
         self.bm41_compare_to_dense = False
 
@@ -312,12 +314,17 @@ class WanSelfAttention(nn.Module):
         maybe_save_first_attention_qkv(roped_query, roped_key, v, "wan_self_attn")
 
         if self.enable_bm41:
+            f, h, w = grid_size
+            assert f % self.bm41_f_tied == 0 and h % self.bm41_h_reduce == 0 and w % self.bm41_w_reduce == 0
             x = bm41_attention(
                 roped_query,
                 roped_key,
                 v,
-                block_size=self.bm41_block_size,
-                grid_size=grid_size,
+                self.bm41_f_tied,
+                self.bm41_h_reduce,
+                self.bm41_w_reduce,
+                h,
+                w,
             )
             maybe_print_dense_attention_mae(
                 "bm41", x, roped_query, roped_key, v,
@@ -831,16 +838,16 @@ class WanModel(ModelMixin, ConfigMixin):
     def bm41_args(self, args: dict):
         self._bm41_args = args
         enable = args.get("enable", False)
-        block_size = args.get("block_size", None)
+        f_tied = args.get("f_tied", 1)
+        h_reduce = args.get("h_reduce", 1)
+        w_reduce = args.get("w_reduce", 1)
         compare_to_dense = args.get("compare_to_dense", False)
-        if enable and block_size is None:
-            raise ValueError(
-                "bm41_args.block_size must be set when bm41_args.enable is true. "
-                "Pass it with --bm41_block_size or add it to the config.")
 
         for block in self.blocks:
             block.self_attn.enable_bm41 = enable
-            block.self_attn.bm41_block_size = block_size
+            block.self_attn.bm41_f_tied = f_tied
+            block.self_attn.bm41_h_reduce = h_reduce
+            block.self_attn.bm41_w_reduce = w_reduce
             block.self_attn.bm41_compare_to_dense = compare_to_dense
 
     def _set_gradient_checkpointing(self, module, value=False):

@@ -87,12 +87,12 @@ def infer_frames(seq):
     return frames
 
 
-def print_attn_sample(A_dense, A_bm41, b, h, r0, r1, c0, c1, block_size):
+def print_attn_sample(A_dense, A_bm41, b, h, r0, r1, c0, c1):
     Ad = A_dense[b, h, r0:r1, c0:c1].float().cpu().numpy()
     Ab = A_bm41[b, h, r0:r1, c0:c1].float().cpu().numpy()
     Dd = np.abs(Ad - Ab)
     nr, nc = Ad.shape
-    print(f"\n=== attn sample b={b} h={h} rows=[{r0}:{r1}) cols=[{c0}:{c1}) bs={block_size} ===")
+    print(f"\n=== attn sample b={b} h={h} rows=[{r0}:{r1}) cols=[{c0}:{c1}) ===")
     print(f"{'':>6}", " ".join(f"c{j:>3}" for j in range(c0, c0 + nc)))
     for label, mat in (("dense", Ad), ("BM41", Ab), ("|diff|", Dd)):
         for i in range(nr):
@@ -108,7 +108,6 @@ def print_attn_sample(A_dense, A_bm41, b, h, r0, r1, c0, c1, block_size):
 def main():
     p = argparse.ArgumentParser(description="Compare dense, BM41, and Monarch attention on saved QKV.")
     p.add_argument("--npz", default="assets/first_qkv/first_attn_qkv_dense_layer0_ts999.npz")
-    p.add_argument("--block-size", type=int, required=True)
     p.add_argument("--quick-tokens", type=int, default=0)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--attn-slice", default="", help="b,h or empty")
@@ -127,7 +126,7 @@ def main():
     with torch.no_grad():
         out_dense = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
         outs = {
-            "BM41": run_bshd(bm41.bm41_attention, q, k, v, seq, block_size=args.block_size, grid_size=grid),
+            "BM41": run_bshd(bm41.bm41_attention, q, k, v, seq, **MONARCH_CFG),
         }
         for n in MONARCH_ITERS:
             outs[f"MRT-{n}"] = run_bshd(
@@ -137,11 +136,11 @@ def main():
         need_attn = args.attn_slice or args.attn_sample
         if need_attn:
             A_dense = attn_matrix(q, k)
-            A_bm41 = bm41.bm41_attn_matrix(q, k, block_size=args.block_size, grid_size=grid)[:, :, :seq, :seq]
+            A_bm41 = bm41.bm41_attn_matrix(q, k, **MONARCH_CFG)[:, :, :seq, :seq]
 
     print(
         f"device={args.device} seq={seq} heads={q.size(1)} dim={q.size(-1)} "
-        f"bm41_bs={args.block_size} mrt_grid={grid} monarch={MONARCH_CFG}"
+        f"grid={grid} shared_monarch_blocks={MONARCH_CFG}"
     )
     if "tag" in data:
         print(f"capture_tag={data['tag']}")
@@ -162,7 +161,7 @@ def main():
 
     sample = parse_csv(args.attn_sample, 6, "--attn-sample")
     if sample:
-        print_attn_sample(A_dense, A_bm41, *sample, block_size=args.block_size)
+        print_attn_sample(A_dense, A_bm41, *sample)
 
 
 if __name__ == "__main__":

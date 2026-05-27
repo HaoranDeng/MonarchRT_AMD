@@ -59,7 +59,9 @@ class CausalWanSelfAttention(nn.Module):
         self.monarch_w_reduce = 1
         self.monarch_f_tied = 1
         self.enable_bm41 = False
-        self.bm41_block_size = None
+        self.bm41_h_reduce = 1
+        self.bm41_w_reduce = 1
+        self.bm41_f_tied = 1
         self.monarch_compare_to_dense = False
         self.bm41_compare_to_dense = False
         
@@ -186,13 +188,18 @@ class CausalWanSelfAttention(nn.Module):
             local_start_index = local_end_index - num_new_tokens
 
             if self.enable_bm41:
+                assert frame_height % self.bm41_h_reduce == 0 and frame_width % self.bm41_w_reduce == 0 and nframes % self.bm41_f_tied == 0
                 kv_cache["k"][:, local_start_index:local_end_index] = roped_key
                 kv_cache["v"][:, local_start_index:local_end_index] = v
                 x = bm41_attention(
                     roped_query,
                     kv_cache["k"][:, cache_start:local_end_index],
                     kv_cache["v"][:, cache_start:local_end_index],
-                    block_size=self.bm41_block_size,
+                    self.bm41_f_tied,
+                    self.bm41_h_reduce,
+                    self.bm41_w_reduce,
+                    frame_height,
+                    frame_width,
                 )
                 maybe_print_dense_attention_mae(
                     "causal_bm41_kv", x, roped_query,
@@ -529,16 +536,16 @@ class CausalWanModel(ModelMixin, ConfigMixin):
     def bm41_args(self, args: dict):
         self._bm41_args = args
         enable = args.get("enable", False)
-        block_size = args.get("block_size", None)
+        f_tied = args.get("f_tied", 1)
+        h_reduce = args.get("h_reduce", 1)
+        w_reduce = args.get("w_reduce", 1)
         compare_to_dense = args.get("compare_to_dense", False)
-        if enable and block_size is None:
-            raise ValueError(
-                "bm41_args.block_size must be set when bm41_args.enable is true. "
-                "Pass it with --bm41_block_size or add it to the config.")
 
         for block in self.blocks:
             block.self_attn.enable_bm41 = enable
-            block.self_attn.bm41_block_size = block_size
+            block.self_attn.bm41_f_tied = f_tied
+            block.self_attn.bm41_h_reduce = h_reduce
+            block.self_attn.bm41_w_reduce = w_reduce
             block.self_attn.bm41_compare_to_dense = compare_to_dense
     
     @property
