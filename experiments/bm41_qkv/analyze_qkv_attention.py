@@ -20,8 +20,8 @@ def load_module(name, path):
     return mod
 
 
-bm41 = load_module("bm41_attn", ROOT / "wan/modules/bm41_attn.py")
-mrt = load_module("monarch_attn", ROOT / "wan/modules/monarch_attn.py")
+bm41 = load_module("bm41", ROOT / "wan/modules/attention/bm41.py")
+mrt = load_module("monarch", ROOT / "wan/modules/attention/monarch.py")
 
 
 def _diff(ref, other):

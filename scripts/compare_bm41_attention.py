@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 spec = importlib.util.spec_from_file_location(
-    "bm41_attn", ROOT / "wan" / "modules" / "bm41_attn.py")
+    "bm41", ROOT / "wan" / "modules" / "attention" / "bm41.py")
 bm41_attn = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bm41_attn)
 bm41_attention = bm41_attn.bm41_attention

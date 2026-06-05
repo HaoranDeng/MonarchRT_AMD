@@ -29,3 +29,6 @@ bm41_args:
   f_tied: 1
   h_reduce: 1
   w_reduce: 1
+  q_init: mean
+  random_seed: 0
+  layout: monarch

@@ -16,8 +16,7 @@ import torch
 import math
 import torch.distributed as dist
 from ..rmsnorm_ops import rmsnorm
-from .bm41_attn import bm41_attention
-from .monarch_attn import monarch_attn, monarch_attn_with_kv_cache
+from .attention import bm41_attention, monarch_attn, monarch_attn_with_kv_cache
 from .model import (
     build_cos_sin_cache_3d,
     apply_rope_video_tokens,
@@ -62,6 +61,9 @@ class CausalWanSelfAttention(nn.Module):
         self.bm41_h_reduce = 1
         self.bm41_w_reduce = 1
         self.bm41_f_tied = 1
+        self.bm41_q_init = None
+        self.bm41_random_seed = None
+        self.bm41_layout = None
         self.monarch_compare_to_dense = False
         self.bm41_compare_to_dense = False
         
@@ -200,6 +202,9 @@ class CausalWanSelfAttention(nn.Module):
                     self.bm41_w_reduce,
                     frame_height,
                     frame_width,
+                    q_init=self.bm41_q_init,
+                    random_seed=self.bm41_random_seed,
+                    layout=self.bm41_layout,
                 )
                 maybe_print_dense_attention_mae(
                     "causal_bm41_kv", x, roped_query,
@@ -539,6 +544,9 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         f_tied = args.get("f_tied", 1)
         h_reduce = args.get("h_reduce", 1)
         w_reduce = args.get("w_reduce", 1)
+        q_init = args.get("q_init", None)
+        random_seed = args.get("random_seed", None)
+        layout = args.get("layout", None)
         compare_to_dense = args.get("compare_to_dense", False)
 
         for block in self.blocks:
@@ -546,6 +554,9 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             block.self_attn.bm41_f_tied = f_tied
             block.self_attn.bm41_h_reduce = h_reduce
             block.self_attn.bm41_w_reduce = w_reduce
+            block.self_attn.bm41_q_init = q_init
+            block.self_attn.bm41_random_seed = random_seed
+            block.self_attn.bm41_layout = layout
             block.self_attn.bm41_compare_to_dense = compare_to_dense
     
     @property
