@@ -31,7 +31,7 @@ mkdir -p "${OUTPUT_FOLDER}"
 find "${OUTPUT_FOLDER}" -mindepth 1 -delete
 
 python inference.py \
-  --config_path configs/wan_bm41_fewstep_dmd.yaml \
+  --config_path configs/wan_monarch_fewstep_dmd.yaml \
   --output_folder "${OUTPUT_FOLDER}" \
   --checkpoint_path checkpoints/self_forcing_dmd.pt \
   --data_path prompts/MovieGenVideoBench_extended.txt \

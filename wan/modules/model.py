@@ -12,7 +12,7 @@ from einops import repeat
 from ..rmsnorm_ops import rmsnorm
 from .._rocm_runtime import is_rocm
 
-from .attention import bm41_attention, flash_attention, monarch_attn
+from .attention import flash_attention, monarch_attn
 
 __all__ = ['WanModel']
 
@@ -273,15 +273,10 @@ class WanSelfAttention(nn.Module):
         self.monarch_h_reduce = 1
         self.monarch_w_reduce = 1
         self.monarch_f_tied = 1
-        self.enable_bm41 = False
-        self.bm41_h_reduce = 1
-        self.bm41_w_reduce = 1
-        self.bm41_f_tied = 1
-        self.bm41_q_init = None
-        self.bm41_random_seed = None
-        self.bm41_layout = None
+        self.monarch_q_init = None
+        self.monarch_random_seed = None
+        self.monarch_query_outer_chunk = None
         self.monarch_compare_to_dense = False
-        self.bm41_compare_to_dense = False
 
         # layers
         self.q = nn.Linear(dim, dim)
@@ -314,30 +309,24 @@ class WanSelfAttention(nn.Module):
         roped_query, roped_key = apply_rope_video_tokens(q, k, rope_cache)
         maybe_save_first_attention_qkv(roped_query, roped_key, v, "wan_self_attn")
 
-        if self.enable_bm41:
-            f, h, w = grid_size
-            assert f % self.bm41_f_tied == 0 and h % self.bm41_h_reduce == 0 and w % self.bm41_w_reduce == 0
-            x = bm41_attention(
-                roped_query,
-                roped_key,
-                v,
-                self.bm41_f_tied,
-                self.bm41_h_reduce,
-                self.bm41_w_reduce,
-                h,
-                w,
-                q_init=self.bm41_q_init,
-                random_seed=self.bm41_random_seed,
-                layout=self.bm41_layout,
-            )
-            maybe_print_dense_attention_mae(
-                "bm41", x, roped_query, roped_key, v,
-                self.bm41_compare_to_dense)
-        elif self.enable_monarch:
+        if self.enable_monarch:
             f, h, w = grid_size
             b, s, _, d = q.shape
             assert f % self.monarch_f_tied == 0 and h % self.monarch_h_reduce == 0 and w % self.monarch_w_reduce == 0
-            x = monarch_attn(roped_query, roped_key, v, self.monarch_f_tied, self.monarch_h_reduce, self.monarch_w_reduce, h, w, num_iters=self.monarch_num_iters)
+            x = monarch_attn(
+                roped_query,
+                roped_key,
+                v,
+                self.monarch_f_tied,
+                self.monarch_h_reduce,
+                self.monarch_w_reduce,
+                h,
+                w,
+                num_iters=self.monarch_num_iters,
+                q_init=self.monarch_q_init,
+                random_seed=self.monarch_random_seed,
+                query_outer_chunk=self.monarch_query_outer_chunk,
+            )
             maybe_print_dense_attention_mae(
                 "monarch", x, roped_query, roped_key, v,
                 self.monarch_compare_to_dense)
@@ -772,7 +761,6 @@ class WanModel(ModelMixin, ConfigMixin):
         self.eps = eps
         self.local_attn_size = 21
         self._monarch_args = {}
-        self._bm41_args = {}
 
         # embeddings
         self.patch_embedding = nn.Conv3d(
@@ -824,6 +812,9 @@ class WanModel(ModelMixin, ConfigMixin):
         f_tied = args.get("f_tied", 1)
         h_reduce = args.get("h_reduce", 1)
         w_reduce = args.get("w_reduce", 1)
+        q_init = args.get("q_init", None)
+        random_seed = args.get("random_seed", None)
+        query_outer_chunk = args.get("query_outer_chunk", None)
         compare_to_dense = args.get("compare_to_dense", False)
 
         for block in self.blocks:
@@ -832,33 +823,10 @@ class WanModel(ModelMixin, ConfigMixin):
             block.self_attn.monarch_f_tied = f_tied
             block.self_attn.monarch_h_reduce = h_reduce
             block.self_attn.monarch_w_reduce = w_reduce
+            block.self_attn.monarch_q_init = q_init
+            block.self_attn.monarch_random_seed = random_seed
+            block.self_attn.monarch_query_outer_chunk = query_outer_chunk
             block.self_attn.monarch_compare_to_dense = compare_to_dense
-
-    @property
-    def bm41_args(self):
-        return self._bm41_args
-
-    @bm41_args.setter
-    def bm41_args(self, args: dict):
-        self._bm41_args = args
-        enable = args.get("enable", False)
-        f_tied = args.get("f_tied", 1)
-        h_reduce = args.get("h_reduce", 1)
-        w_reduce = args.get("w_reduce", 1)
-        q_init = args.get("q_init", None)
-        random_seed = args.get("random_seed", None)
-        layout = args.get("layout", None)
-        compare_to_dense = args.get("compare_to_dense", False)
-
-        for block in self.blocks:
-            block.self_attn.enable_bm41 = enable
-            block.self_attn.bm41_f_tied = f_tied
-            block.self_attn.bm41_h_reduce = h_reduce
-            block.self_attn.bm41_w_reduce = w_reduce
-            block.self_attn.bm41_q_init = q_init
-            block.self_attn.bm41_random_seed = random_seed
-            block.self_attn.bm41_layout = layout
-            block.self_attn.bm41_compare_to_dense = compare_to_dense
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = value

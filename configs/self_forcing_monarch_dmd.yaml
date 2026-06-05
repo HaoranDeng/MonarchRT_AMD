@@ -59,3 +59,5 @@ monarch_args:
   f_tied: 1
   h_reduce: 1
   w_reduce: 1
+  q_init: ith
+  random_seed: 0

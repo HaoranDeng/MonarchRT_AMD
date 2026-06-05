@@ -22,13 +22,8 @@ num_frames: 81
 monarch_args:
   enable: false
   compare_to_dense: true
-
-bm41_args:
-  enable: false
-  compare_to_dense: true
   f_tied: 1
   h_reduce: 1
   w_reduce: 1
-  q_init: mean
+  q_init: ith
   random_seed: 0
-  layout: monarch

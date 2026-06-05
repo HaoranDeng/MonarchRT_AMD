@@ -18,7 +18,6 @@ class CausalDiffusion(BaseModel):
         if self.independent_first_frame:
             self.generator.model.independent_first_frame = True
         self.generator.model.monarch_args = getattr(args, "monarch_args", {})
-        self.generator.model.bm41_args = getattr(args, "bm41_args", {})
 
         if args.gradient_checkpointing:
             self.generator.enable_gradient_checkpointing()
