@@ -3,9 +3,7 @@ import os
 import torch
 from einops import rearrange
 
-
-def _is_identity_q_init(q_init):
-    return q_init.lower() in {"identity", "ith", "i"}
+from .cache import splice_cache
 
 
 def _random_q_indices(num_choices, num_positions, device, random_seed):
@@ -27,7 +25,7 @@ def _random_q_indices(num_choices, num_positions, device, random_seed):
 
 def _initial_r_query(q, k_size, q_init, random_seed):
     q_init = q_init.lower()
-    if _is_identity_q_init(q_init):
+    if q_init in {"identity", "ith", "i"}:
         return q
     if q_init in {"uniform", "mean", "avg", "average"}:
         return q.mean(dim=2, keepdim=True).expand(-1, -1, k_size, -1, -1, -1)
@@ -70,41 +68,62 @@ def _get_rearrange_fns(x, f_tied, h_reduce, w_reduce, h, w):
     return rearrange_fn, return_fn
 
 
-def _monarch_one_step_factors(q, k, scale, q_init, random_seed=None):
-    """
-    Compute one MonarchAttention R/L update with a configurable L^(0).
-
-    q has shape [B, A, I, J, H, D] and k has shape [B, F, K, L, H, D].
-    Standard MRT-1 is q_init="ith": the initial L is identity, so
-    a_R[..., k, j] is Q[..., k, j].
-    """
+def _monarch_attention_chunk(q, k, v, scale, q_init, random_seed, num_iters):
     if q.size(2) != k.size(2):
         raise ValueError(
-            "one-step Monarch initialization requires matching I/K block sizes."
+            "MonarchAttention requires matching query I and key K block sizes."
         )
+    if num_iters < 1:
+        raise ValueError("num_iters must be >= 1.")
 
     sm_scale_sqrt = scale**0.5
     q_scaled = q * sm_scale_sqrt
     k_scaled = k * sm_scale_sqrt
     a_r = _initial_r_query(q_scaled, k_scaled.size(2), q_init, random_seed)
+    c_r = torch.ones(
+        (
+            q.size(0),
+            q.size(4),
+            q.size(1),
+            k.size(1),
+            k.size(2),
+            q.size(3),
+            1,
+        ),
+        device=q.device,
+        dtype=q.dtype,
+    )
 
-    r_logits = torch.einsum("bakjhd,bfklhd->bhafkjl", a_r, k_scaled)
-    r_logits = r_logits - r_logits.amax(dim=-1, keepdim=True)
-    r = torch.softmax(r_logits.float(), dim=-1).to(q.dtype)
+    for step in range(num_iters):
+        r_logits = torch.einsum("bafkjhd,bfklhd->bhafkjl", a_r, k_scaled)
+        r_logits = r_logits.float() * (1.0 / (c_r + 1e-6)).clamp_max(1e4)
+        r_logits = r_logits - r_logits.amax(dim=-1, keepdim=True)
+        r = torch.softmax(r_logits, dim=-1).to(q.dtype)
 
-    r_float = r.float().clamp_min(torch.finfo(torch.float32).tiny)
-    c_l = (r_float * r_float.log()).sum(dim=-1, keepdim=True).transpose(-2, -3)
-    a_l = torch.einsum("bhafkjl,bfklhd->bafjkhd", r, k_scaled)
+        a_l = torch.einsum("bhafkjl,bfklhd->bafjkhd", r, k_scaled)
+        logz = torch.logsumexp(r_logits, dim=-1, keepdim=True)
+        c_l = (r * (r_logits - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3)
 
-    l_logits = torch.einsum("bafjkhd,baijhd->bhafjki", a_l, q_scaled) - c_l
-    l = rearrange(l_logits, "b h a f j k i -> b h a j i (f k)")
-    l = torch.softmax(l.float(), dim=-1).to(q.dtype)
-    l = rearrange(l, "b h a j i (f k) -> b h a f j k i", f=k.size(1), k=k.size(2))
-    return r, l
+        l_logits = torch.einsum("bafjkhd,baijhd->bhafjki", a_l, q_scaled) - c_l
+        l = rearrange(l_logits, "b h a f j k i -> b h a j i (f k)")
+        l = torch.softmax(l.float(), dim=-1).to(q.dtype)
+        l = rearrange(
+            l,
+            "b h a j i (f k) -> b h a f j k i",
+            f=k.size(1),
+            k=k.size(2),
+        )
+
+        if step == num_iters - 1:
+            y = torch.einsum("bhafkjl,bfklhe->bafjkhe", r, v)
+            return torch.einsum("bhafjki,bafjkhe->baijhe", l, y)
+
+        a_r = torch.einsum("bhafjki,baijhd->bafkjhd", l, q_scaled)
+        c_r = l.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).transpose(-2, -3)
 
 
-def _monarch_one_step_attention_blocks(
-    q, k, v, scale, query_outer_chunk, q_init, random_seed
+def _monarch_attention_blocks(
+    q, k, v, scale, query_outer_chunk, q_init, random_seed, num_iters
 ):
     b, outer_q, inner_i, inner_j, num_heads, value_dim = (
         q.size(0),
@@ -127,89 +146,10 @@ def _monarch_one_step_attention_blocks(
 
     for start in range(0, outer_q, query_outer_chunk):
         end = min(start + query_outer_chunk, outer_q)
-        r, l = _monarch_one_step_factors(
-            q[:, start:end], k, scale, q_init, random_seed=random_seed
+        out[:, start:end] = _monarch_attention_chunk(
+            q[:, start:end], k, v, scale, q_init, random_seed, num_iters
         )
-        y = torch.einsum("bhafkjl,bfklhe->bafjkhe", r, v)
-        out[:, start:end] = torch.einsum("bhafjki,bafjkhe->baijhe", l, y)
     return out
-
-
-def monarch_attn_slow(q, k, v, sm_scale, num_iters=1):
-    b, a, i, j, h, _ = q.shape
-    block_b1, block_b2 = i, j
-    num_k_blocks = k.shape[1]
-
-    sm_scale_sqrt = sm_scale**0.5
-    q = q * sm_scale_sqrt
-    k = k * sm_scale_sqrt
-
-    a_r = q.clone().unsqueeze(-5).expand(
-        -1, -1, num_k_blocks, -1, -1, -1, -1
-    )
-    c_r = torch.ones(
-        (b, h, a, num_k_blocks, block_b1, block_b2, 1),
-        device=q.device,
-        dtype=q.dtype,
-    )
-
-    for _ in range(num_iters - 1):
-        b_r = torch.einsum("bafkjhd,bfklhd->bhafkjl", a_r, k)
-        z = b_r.float() * (1.0 / (c_r + 1e-6)).clamp_max(1e4)
-        z = z - z.amax(dim=-1, keepdim=True)
-        r = torch.softmax(z, dim=-1).to(q.dtype)
-        a_l = torch.einsum("bhafkjl,bfklhd->bafjkhd", r, k)
-        logz = torch.logsumexp(z, dim=-1, keepdim=True)
-        c_l = (r * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3)
-
-        b_l = torch.einsum("bafjkhd,baijhd->bhafjki", a_l, q)
-        l = rearrange(b_l - c_l, "b h a f j k i -> b h a j i (f k)")
-        l = torch.softmax(l, dim=-1).to(q.dtype)
-        l = rearrange(
-            l,
-            "b h a j i (f k) -> b h a f j k i",
-            f=num_k_blocks,
-            k=block_b1,
-        )
-
-        a_r = torch.einsum("bhafjki,baijhd->bafkjhd", l, q)
-        c_r = l.sum(dim=-1, dtype=torch.float32).unsqueeze(-1).transpose(-2, -3)
-
-    b_r = torch.einsum("bafkjhd,bfklhd->bhafkjl", a_r, k)
-    z = b_r.float() * (1.0 / (c_r + 1e-6)).clamp_max(1e4)
-    z = z - z.amax(dim=-1, keepdim=True)
-    r = torch.softmax(z, dim=-1).to(q.dtype)
-    a_l = torch.einsum("bhafkjl,bfklhd->bafjkhd", r, k)
-    logz = torch.logsumexp(z, dim=-1, keepdim=True)
-    c_l = (r * (z - logz)).sum(dim=-1, keepdim=True).transpose(-2, -3)
-    y = torch.einsum("bhafkjl,bfklhd->bafjkhd", r, v)
-
-    b_l = torch.einsum("bafjkhd,baijhd->bhafjki", a_l, q)
-    l = rearrange(b_l - c_l, "b h a f j k i -> b h a j i (f k)")
-    l = torch.softmax(l, dim=-1).to(q.dtype)
-    l = rearrange(
-        l,
-        "b h a j i (f k) -> b h a f j k i",
-        f=num_k_blocks,
-        k=block_b1,
-    )
-    return torch.einsum("bhafjki,bafjkhd->baijhd", l, y)
-
-
-def _resolve_q_init(q_init):
-    return os.environ.get("MONARCH_Q_INIT", q_init or "ith")
-
-
-def _resolve_random_seed(random_seed):
-    if "MONARCH_RANDOM_SEED" in os.environ:
-        return int(os.environ["MONARCH_RANDOM_SEED"])
-    return random_seed
-
-
-def _resolve_query_outer_chunk(query_outer_chunk):
-    if query_outer_chunk is None:
-        query_outer_chunk = int(os.environ.get("MONARCH_QUERY_OUTER_CHUNK", "1"))
-    return max(1, int(query_outer_chunk))
 
 
 def monarch_attn(
@@ -233,9 +173,12 @@ def monarch_attn(
     if sm_scale is None:
         sm_scale = d**-0.5
 
-    q_init = _resolve_q_init(q_init)
-    random_seed = _resolve_random_seed(random_seed)
-    query_outer_chunk = _resolve_query_outer_chunk(query_outer_chunk)
+    q_init = os.environ.get("MONARCH_Q_INIT", q_init or "ith")
+    if "MONARCH_RANDOM_SEED" in os.environ:
+        random_seed = int(os.environ["MONARCH_RANDOM_SEED"])
+    if query_outer_chunk is None:
+        query_outer_chunk = int(os.environ.get("MONARCH_QUERY_OUTER_CHUNK", "1"))
+    query_outer_chunk = max(1, int(query_outer_chunk))
 
     if block_causal_size is not None:
         block_tokens = f_tied * h * w
@@ -270,36 +213,17 @@ def monarch_attn(
     k_blocks = rearrange_fn(k).contiguous()
     v_blocks = rearrange_fn(v).contiguous()
 
-    if num_iters == 1:
-        out = _monarch_one_step_attention_blocks(
-            q_blocks,
-            k_blocks,
-            v_blocks,
-            sm_scale,
-            query_outer_chunk,
-            q_init,
-            random_seed,
-        )
-    else:
-        if not _is_identity_q_init(q_init):
-            raise ValueError("non-identity Monarch q_init is only supported for num_iters=1.")
-        out = monarch_attn_slow(q_blocks, k_blocks, v_blocks, sm_scale, num_iters)
+    out = _monarch_attention_blocks(
+        q_blocks,
+        k_blocks,
+        v_blocks,
+        sm_scale,
+        query_outer_chunk,
+        q_init,
+        random_seed,
+        num_iters,
+    )
     return return_fn(out)
-
-
-def _splice_cache(cache, new_values, start_idx, end_idx, grad_only_new_values):
-    if end_idx - start_idx != new_values.shape[1]:
-        raise ValueError("cache update range must match the new value length.")
-
-    with torch.no_grad():
-        cache[:, start_idx:end_idx].copy_(new_values)
-
-    left = cache[:, :start_idx]
-    right = cache[:, end_idx:]
-    if grad_only_new_values:
-        left = left.detach()
-        right = right.detach()
-    return torch.cat((left, new_values, right), dim=1)
 
 
 def monarch_attn_with_kv_cache(
@@ -324,8 +248,8 @@ def monarch_attn_with_kv_cache(
     grad_only_new_kv = torch.is_grad_enabled() and not (
         k_cache.requires_grad or v_cache.requires_grad
     )
-    k = _splice_cache(k_cache, new_k, start_idx, end_idx, grad_only_new_kv)
-    v = _splice_cache(v_cache, new_v, start_idx, end_idx, grad_only_new_kv)
+    k = splice_cache(k_cache, new_k, start_idx, end_idx, grad_only_new_kv)
+    v = splice_cache(v_cache, new_v, start_idx, end_idx, grad_only_new_kv)
     return monarch_attn(
         q,
         k,
