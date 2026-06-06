@@ -12,7 +12,7 @@ from einops import repeat
 from ..rmsnorm_ops import rmsnorm
 from .._rocm_runtime import is_rocm
 
-from .attention import flash_attention, monarch_attn
+from attention import flash_attention, monarch_attn
 
 __all__ = ['WanModel']
 

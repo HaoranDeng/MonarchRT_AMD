@@ -1,4 +1,4 @@
-from wan.modules.attention import attention
+from attention import attention
 from wan.modules.model import (
     WanRMSNorm,
     WanLayerNorm,
@@ -16,7 +16,7 @@ import torch
 import math
 import torch.distributed as dist
 from ..rmsnorm_ops import rmsnorm
-from .attention import monarch_attn, monarch_attn_with_kv_cache
+from attention import monarch_attn, monarch_attn_with_kv_cache
 from .model import (
     build_cos_sin_cache_3d,
     apply_rope_video_tokens,
