@@ -95,7 +95,10 @@ def _monarch_attention_chunk(q, k, v, scale, q_init, random_seed, num_iters):
     )
 
     for step in range(num_iters):
-        r_logits = torch.einsum("bafkjhd,bfklhd->bhafkjl", a_r, k_scaled)
+        if a_r.dim() == 6:
+            r_logits = torch.einsum("bakjhd,bfklhd->bhafkjl", a_r, k_scaled)
+        else:
+            r_logits = torch.einsum("bafkjhd,bfklhd->bhafkjl", a_r, k_scaled)
         r_logits = r_logits.float() * (1.0 / (c_r + 1e-6)).clamp_max(1e4)
         r_logits = r_logits - r_logits.amax(dim=-1, keepdim=True)
         r = torch.softmax(r_logits, dim=-1).to(q.dtype)
