@@ -199,6 +199,9 @@ class CausalWanSelfAttention(nn.Module):
                     frame_height,
                     frame_width,
                     num_iters=self.monarch_num_iters,
+                    q_init=self.monarch_q_init,
+                    random_seed=self.monarch_random_seed,
+                    query_outer_chunk=self.monarch_query_outer_chunk,
                 )
                 dense_k = kv_cache["k"][:, cache_start:local_end_index].clone()
                 dense_v = kv_cache["v"][:, cache_start:local_end_index].clone()
