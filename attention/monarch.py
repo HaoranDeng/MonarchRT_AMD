@@ -248,26 +248,27 @@ def monarch_attn_with_kv_cache(
     random_seed=None,
     query_outer_chunk=None,
 ):
-    grad_only_new_kv = torch.is_grad_enabled() and not (
-        k_cache.requires_grad or v_cache.requires_grad
-    )
-    k = splice_cache(k_cache, new_k, start_idx, end_idx, grad_only_new_kv)
-    v = splice_cache(v_cache, new_v, start_idx, end_idx, grad_only_new_kv)
-    return monarch_attn(
-        q,
-        k,
-        v,
-        f_tied,
-        h_reduce,
-        w_reduce,
-        h,
-        w,
-        sm_scale=sm_scale,
-        num_iters=num_iters,
-        q_init=q_init,
-        random_seed=random_seed,
-        query_outer_chunk=query_outer_chunk,
-    )
+    raise NotImplementedError("monarch_attn_with_kv_cache is temporarily disabled.")
+    # grad_only_new_kv = torch.is_grad_enabled() and not (
+    #     k_cache.requires_grad or v_cache.requires_grad
+    # )
+    # k = splice_cache(k_cache, new_k, start_idx, end_idx, grad_only_new_kv)
+    # v = splice_cache(v_cache, new_v, start_idx, end_idx, grad_only_new_kv)
+    # return monarch_attn(
+    #     q,
+    #     k,
+    #     v,
+    #     f_tied,
+    #     h_reduce,
+    #     w_reduce,
+    #     h,
+    #     w,
+    #     sm_scale=sm_scale,
+    #     num_iters=num_iters,
+    #     q_init=q_init,
+    #     random_seed=random_seed,
+    #     query_outer_chunk=query_outer_chunk,
+    # )
 
 
 __all__ = ["monarch_attn", "monarch_attn_with_kv_cache"]
