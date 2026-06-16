@@ -16,7 +16,7 @@ import torch
 import math
 import torch.distributed as dist
 from ..rmsnorm_ops import rmsnorm
-from attention import monarch_attn, monarch_attn_with_kv_cache
+from attention import monarch_attn
 from .model import (
     build_cos_sin_cache_3d,
     apply_rope_video_tokens,
@@ -184,33 +184,9 @@ class CausalWanSelfAttention(nn.Module):
             local_start_index = local_end_index - num_new_tokens
 
             if self.enable_monarch:
-                assert frame_height % self.monarch_h_reduce == 0 and frame_width % self.monarch_w_reduce == 0 and nframes % self.monarch_f_tied == 0
-                x = monarch_attn_with_kv_cache(
-                    roped_query,
-                    kv_cache["k"][:, cache_start:local_end_index],
-                    kv_cache["v"][:, cache_start:local_end_index],
-                    roped_key,
-                    v,
-                    local_start_index - cache_start,
-                    local_end_index - cache_start,
-                    self.monarch_f_tied,
-                    self.monarch_h_reduce,
-                    self.monarch_w_reduce,
-                    frame_height,
-                    frame_width,
-                    num_iters=self.monarch_num_iters,
-                    q_init=self.monarch_q_init,
-                    random_seed=self.monarch_random_seed,
-                    query_outer_chunk=self.monarch_query_outer_chunk,
+                raise NotImplementedError(
+                    "Monarch attention with KV cache is not implemented."
                 )
-                dense_k = kv_cache["k"][:, cache_start:local_end_index].clone()
-                dense_v = kv_cache["v"][:, cache_start:local_end_index].clone()
-                dense_start = local_start_index - cache_start
-                dense_k[:, dense_start:dense_start + roped_key.shape[1]] = roped_key
-                dense_v[:, dense_start:dense_start + v.shape[1]] = v
-                maybe_print_dense_attention_mae(
-                    "causal_monarch_kv", x, roped_query, dense_k, dense_v,
-                    self.monarch_compare_to_dense)
             else:
                 kv_cache["k"][:, local_start_index:local_end_index] = roped_key
                 kv_cache["v"][:, local_start_index:local_end_index] = v
