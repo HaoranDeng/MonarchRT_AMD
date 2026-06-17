@@ -22,6 +22,8 @@ def _random_q_indices(num_choices, num_positions, device, random_seed):
 
 
 def _initial_r_query(q, k_size, q_init, random_seed):
+    # q is [batch, outer, row, column, head, dim] after Monarch rearrange.
+    # q_init variants select along dim=2, the row axis matched with key rows.
     q_init = q_init.lower()
     if q_init in {"identity", "ith", "i"}:
         return q
