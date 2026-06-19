@@ -22,8 +22,12 @@ def _random_q_indices(num_choices, num_positions, device, random_seed):
 
 
 def _initial_r_query(q, k_size, q_init, random_seed):
-    # q is [batch, outer, row, column, head, dim] after Monarch rearrange.
-    # q_init variants select along dim=2, the row axis matched with key rows.
+    # q is [batch, query_outer, query_row, query_column, head, dim].
+    # k is [batch, key_outer, key_row, key_column, head, dim] in the caller.
+    # Default 480p/81-frame example: outer=21, row=30, column=52.
+    # Rank-1 tiles are indexed by (query_outer, key_outer, query_column=52,
+    # key_row=30); each tile is approximated over (query_row=30, key_column=52).
+    # q_init variants select along dim=2, the query_row/key_row axis.
     q_init = q_init.lower()
     if q_init in {"identity", "ith", "i"}:
         return q
