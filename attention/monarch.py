@@ -26,11 +26,16 @@ def _initial_r_query(q, k_size, q_init, random_seed):
     #   e.g. [batch, 21, (30), 52, head, dim] for default 480p/81-frame inference.
     # k is [batch, key_outer, key_row, key_column, head, dim] in the caller.
     #   e.g. [batch, 21, 30, (52), head, dim] for default 480p/81-frame inference.
-    # Parentheses mark rank-1 tile axes: query_row x key_column.
+    # Parentheses mark default cross tile axes: query_row x key_column.
     # query_column=52 and key_row=30 index different rank-1 tiles.
     # q_init variants select along dim=2, the query_row/key_row axis.
     q_init = q_init.lower()
     if q_init in {"identity", "ith", "i"}:
+        if q.size(2) != k_size:
+            raise ValueError(
+                "q_init=ith requires matched query/key block axes; use mean, "
+                "1st, or random for row_row/col_col tile axes."
+            )
         return q
     if q_init in {"uniform", "mean", "avg", "average"}:
         return q.mean(dim=2, keepdim=True).expand(-1, -1, k_size, -1, -1, -1)
@@ -73,11 +78,71 @@ def _get_rearrange_fns(x, f_tied, h_reduce, w_reduce, h, w):
     return rearrange_fn, return_fn
 
 
-def _monarch_attention_chunk(q, k, v, scale, q_init, random_seed, num_iters):
-    if q.size(2) != k.size(2):
-        raise ValueError(
-            "MonarchAttention requires matching query I and key K block sizes."
+def _normalize_tile_axes(tile_axes):
+    tile_axes = tile_axes.lower().replace("-", "_")
+    if tile_axes in {"cross", "row_col", "query_row_key_col"}:
+        return "cross"
+    if tile_axes in {"row_row", "rows"}:
+        return "row_row"
+    if tile_axes in {"col_col", "column_column", "columns"}:
+        return "col_col"
+    raise ValueError(
+        f"unsupported tile_axes={tile_axes!r}; expected cross, row_row, or col_col."
+    )
+
+
+def _run_tiled_monarch_attention(
+    q_blocks,
+    k_blocks,
+    v_blocks,
+    scale,
+    query_outer_chunk,
+    q_init,
+    random_seed,
+    num_iters,
+    tile_axes,
+):
+    if tile_axes == "cross":
+        return _monarch_attention_blocks(
+            q_blocks,
+            k_blocks,
+            v_blocks,
+            scale,
+            query_outer_chunk,
+            q_init,
+            random_seed,
+            num_iters,
         )
+
+    if tile_axes == "row_row":
+        out = _monarch_attention_blocks(
+            q_blocks.transpose(2, 3).contiguous(),
+            k_blocks,
+            v_blocks,
+            scale,
+            query_outer_chunk,
+            q_init,
+            random_seed,
+            num_iters,
+        )
+        return out.transpose(2, 3).contiguous()
+
+    if tile_axes == "col_col":
+        return _monarch_attention_blocks(
+            q_blocks,
+            k_blocks.transpose(2, 3).contiguous(),
+            v_blocks.transpose(2, 3).contiguous(),
+            scale,
+            query_outer_chunk,
+            q_init,
+            random_seed,
+            num_iters,
+        )
+
+    raise AssertionError(f"unreachable tile_axes={tile_axes!r}")
+
+
+def _monarch_attention_chunk(q, k, v, scale, q_init, random_seed, num_iters):
     if num_iters < 1:
         raise ValueError("num_iters must be >= 1.")
 
@@ -175,6 +240,7 @@ def monarch_attn(
     q_init=None,
     random_seed=None,
     query_outer_chunk=None,
+    tile_axes=None,
 ):
     b, qs, nh, d = q.shape
     ks = k.shape[1]
@@ -182,6 +248,9 @@ def monarch_attn(
         sm_scale = d**-0.5
 
     q_init = os.environ.get("MONARCH_Q_INIT", q_init or "ith")
+    tile_axes = _normalize_tile_axes(
+        os.environ.get("MONARCH_TILE_AXES", tile_axes or "cross")
+    )
     if "MONARCH_RANDOM_SEED" in os.environ:
         random_seed = int(os.environ["MONARCH_RANDOM_SEED"])
     if query_outer_chunk is None:
@@ -212,6 +281,7 @@ def monarch_attn(
                     q_init=q_init,
                     random_seed=random_seed,
                     query_outer_chunk=query_outer_chunk,
+                    tile_axes=tile_axes,
                 )
             )
         return torch.cat(chunks, dim=1)
@@ -221,7 +291,7 @@ def monarch_attn(
     k_blocks = rearrange_fn(k).contiguous()
     v_blocks = rearrange_fn(v).contiguous()
 
-    out = _monarch_attention_blocks(
+    out = _run_tiled_monarch_attention(
         q_blocks,
         k_blocks,
         v_blocks,
@@ -230,6 +300,7 @@ def monarch_attn(
         q_init,
         random_seed,
         num_iters,
+        tile_axes,
     )
     return return_fn(out)
 

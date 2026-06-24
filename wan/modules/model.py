@@ -276,6 +276,7 @@ class WanSelfAttention(nn.Module):
         self.monarch_q_init = None
         self.monarch_random_seed = None
         self.monarch_query_outer_chunk = None
+        self.monarch_tile_axes = None
         self.monarch_compare_to_dense = False
 
         # layers
@@ -326,6 +327,7 @@ class WanSelfAttention(nn.Module):
                 q_init=self.monarch_q_init,
                 random_seed=self.monarch_random_seed,
                 query_outer_chunk=self.monarch_query_outer_chunk,
+                tile_axes=self.monarch_tile_axes,
             )
             maybe_print_dense_attention_mae(
                 "monarch", x, roped_query, roped_key, v,
@@ -815,6 +817,7 @@ class WanModel(ModelMixin, ConfigMixin):
         q_init = args.get("q_init", None)
         random_seed = args.get("random_seed", None)
         query_outer_chunk = args.get("query_outer_chunk", None)
+        tile_axes = args.get("tile_axes", None)
         compare_to_dense = args.get("compare_to_dense", False)
 
         for block in self.blocks:
@@ -826,6 +829,7 @@ class WanModel(ModelMixin, ConfigMixin):
             block.self_attn.monarch_q_init = q_init
             block.self_attn.monarch_random_seed = random_seed
             block.self_attn.monarch_query_outer_chunk = query_outer_chunk
+            block.self_attn.monarch_tile_axes = tile_axes
             block.self_attn.monarch_compare_to_dense = compare_to_dense
 
     def _set_gradient_checkpointing(self, module, value=False):
